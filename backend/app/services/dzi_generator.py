@@ -5,6 +5,7 @@ Generates tile pyramid compatible with OpenSeadragon.
 import os
 import math
 import logging
+import shutil
 from PIL import Image
 
 # Allow very large images (e.g. 200MB scans)
@@ -40,10 +41,14 @@ def generate_dzi(filepath: str, dzi_dir: str) -> str | None:
         out_dir = os.path.join(dzi_dir, f"{base_name}_files")
         os.makedirs(out_dir, exist_ok=True)
 
-        # Open image once — avoid re-decoding JPEG for every pyramid level
+        # Open image once — avoid re-decoding for every pyramid level.
+        # 必须在 with 内完成解码/转内存图：with 退出会关闭文件句柄，
+        # 金字塔循环再 resize 会触发 PIL "assert self.fp is not None"（空消息 AssertionError）
         with Image.open(filepath) as img:
             if img.mode in ('RGBA', 'LA', 'P'):
                 img = img.convert('RGB')
+            else:
+                img.load()
             width, height = img.size
 
         num_levels = _get_num_levels(width, height)
@@ -94,4 +99,13 @@ def generate_dzi(filepath: str, dzi_dir: str) -> str | None:
     
     except Exception as e:
         logger.error("DZI generation failed for %s: %s", filepath, e)
+        # 清理半成品：不留“有瓦片无头”的孤儿目录（否则历史记录/查看器出现死链）
+        try:
+            _base = os.path.splitext(os.path.basename(filepath))[0]
+            shutil.rmtree(os.path.join(dzi_dir, f"{_base}_files"), ignore_errors=True)
+            _head = os.path.join(dzi_dir, f"{_base}.dzi")
+            if os.path.exists(_head):
+                os.remove(_head)
+        except Exception:
+            pass
         return None
