@@ -363,14 +363,7 @@ async def analyze_single_record(record_id: int, cur) -> dict:
     final_combined_norm = molin_result.combined_normalized
 
     try:
-        from app.services.llm_emotion_corrector import correct_dimensions
-
-        engine_dict = {
-            "text": molin_result.text, "spatial": molin_result.spatial,
-            "painting": molin_result.painting, "size": molin_result.size,
-            "period": molin_result.period, "seal": molin_result.seal,
-            "theme": molin_result.theme, "brush_ink": molin_result.brush_ink,
-        }
+        from app.services.llm_emotion_corrector import judge_independently, judge_score_for_dimension
 
         # 构建空间布局文本描述
         spatial_info_text = None
@@ -383,30 +376,24 @@ async def analyze_single_record(record_id: int, cur) -> dict:
                 parts.append(f"留白{se['blank_percent']:.0f}%")
             spatial_info_text = "；".join(p for p in parts if p)
 
-        # 构建尺寸文本描述
-        size_info_text = None
-        if width_cm and height_cm:
-            size_info_text = f"{height_cm}cm × {width_cm}cm"
-
-        llm_analysis = await correct_dimensions(
+        llm_analysis = await judge_independently(
             text=text or "",
-            lexicon_result=engine_dict,
             artist=artist,
             year=year,
             themes=result.get("themes", []),
             spatial_info=spatial_info_text,
             seal_info=seal_content,
-            size_info=size_info_text,
         )
 
-        if llm_analysis and llm_analysis.get("scores"):
-            # LLM 为主：直接用 LLM 绝对分作为最终分
+        if llm_analysis and llm_analysis.get("dimension_scores"):
+            # LLM 裁判为主：逐维度择优（高置信裁判分，否则词库基线），与 admin 重分析同规则
             new_ca["llm_analysis"] = llm_analysis
             analysis_method = "llm_independent"
-            llm_scores_raw = llm_analysis["scores"]
-            def _llm_score(v):
-                return v.get("score", 0) if isinstance(v, dict) else (v or 0)
-            llm_scores = {k: _llm_score(v) for k, v in llm_scores_raw.items()}
+            judge_dims_raw = llm_analysis["dimension_scores"]
+            def _llm_score(dim_key):
+                lex_raw = getattr(molin_result, dim_key, type('',(),{'raw':0})()).raw or 0
+                return judge_score_for_dimension(judge_dims_raw.get(dim_key), lex_raw)
+            llm_scores = {k: _llm_score(k) for k in ['text','spatial','painting','size','period','seal','theme','brush_ink']}
 
             # 加权平均（用引擎的 weights 和 confidence）
             weights_used = molin_result.weights_used
@@ -422,7 +409,7 @@ async def analyze_single_record(record_id: int, cur) -> dict:
             from app.services.molin_engine import vader_normalize, classify_polarity
             final_combined_norm = vader_normalize(final_combined_raw)
             final_cp = classify_polarity(final_combined_norm)
-            final_cr = llm_analysis.get("reasoning", "")
+            final_cr = (llm_analysis.get("combined") or {}).get("summary", "")
     except Exception as e:
         logger.warning(f"LLM emotion corrector skipped (record_id={record_id}): {e}")
 

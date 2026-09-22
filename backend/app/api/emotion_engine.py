@@ -210,7 +210,8 @@ def _save_lexicon(lexicon):
         "version": lexicon.version,
         "generated_at": lexicon.generated_at,
         "method": "llm_rating + manual",
-        "model": "deepseek-v4-flash",
+        # 回写文件里的原始生成模型，不硬编码（手动增删词条不应篡改生成元数据）
+        "model": getattr(lexicon, "model", "") or "deepseek-v4-flash",
         "total_words": lexicon.total_words,
         "entries": lexicon.entries,
     }

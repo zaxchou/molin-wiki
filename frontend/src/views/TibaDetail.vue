@@ -1371,10 +1371,11 @@ function getDimDetail(dimKey) {
   return [{ label: t('tibadetail.s1'), score: 0, desc: '' }]
 }
 
-// 获取 LLM 对该维度的 reasoning
+// 获取 LLM 对该维度的 reasoning（兼容 v3.2 judge 格式与旧 corrections 格式）
 function getLlmReasoning(dimNameKey) {
   const dimKey = dimNameKey.replace('factor.', '')
-  return contentAnalysis.value?.llm_analysis?.corrections?.[dimKey]?.reasoning || ''
+  const la = contentAnalysis.value?.llm_analysis
+  return la?.dimension_scores?.[dimKey]?.reasoning || la?.corrections?.[dimKey]?.reasoning || ''
 }
 
 // VADER 归一化函数（前端版本，α=8）

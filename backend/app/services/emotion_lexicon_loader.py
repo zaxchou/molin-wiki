@@ -22,6 +22,7 @@ class EmotionLexicon:
         self.entries: Dict[str, Dict] = {}
         self.version: str = ""
         self.generated_at: str = ""
+        self.model: str = ""
 
         if os.path.exists(lexicon_path):
             with open(lexicon_path, "r", encoding="utf-8") as f:
@@ -29,6 +30,7 @@ class EmotionLexicon:
                 self.entries = data.get("entries", {})
                 self.version = data.get("version", "")
                 self.generated_at = data.get("generated_at", "")
+                self.model = data.get("model", "")
 
     def get_score(self, word: str) -> Optional[int]:
         """获取词语的情感分数"""

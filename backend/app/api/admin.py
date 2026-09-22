@@ -617,7 +617,11 @@ def get_emotion_log_detail(
     dimensions = []
     for dim in dims:
         lex = ls.get(dim, {}) if isinstance(ls, dict) else {}
-        corr = la.get("corrections", {}).get(dim, {}) if isinstance(la.get("corrections"), dict) else {}
+        # v3.2 judge 格式优先（dimension_scores），回退旧 corrections 格式
+        jd = la.get("dimension_scores") if isinstance(la.get("dimension_scores"), dict) else {}
+        corr = jd.get(dim) if isinstance(jd.get(dim), dict) else {}
+        if not corr:
+            corr = la.get("corrections", {}).get(dim, {}) if isinstance(la.get("corrections"), dict) else {}
         dimensions.append({
             "key": dim,
             "lexicon_raw": lex.get("raw") if isinstance(lex, dict) else None,
