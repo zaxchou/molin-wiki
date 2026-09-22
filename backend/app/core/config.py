@@ -154,6 +154,11 @@ class Settings(BaseSettings):
     # DashScope 多模态 Embedding 开关（图像向量化用 multimodal-embedding-v1）
     DASHSCOPE_MULTIMODAL_ENABLED: bool = Field(default=True)
 
+    # Embedding 模型名。⚠️ 改模型 = 改变整个向量空间，必须与 Qdrant 集合重建配套执行，
+    # 且不跟随管理后台「AI 接口」开关（见 docs/plans/2026-09/embedding-rebuild-playbook.md）
+    EMBEDDING_TEXT_MODEL: str = Field(default="text-embedding-v3")
+    EMBEDDING_IMAGE_MODEL: str = Field(default="multimodal-embedding-v1")
+
     COMPOSITION_LLM_MODEL: str = Field(default="qwen3-vl-flash")
     COMPOSITION_LLM_MAX_TOKENS: int = Field(default=16384)
 

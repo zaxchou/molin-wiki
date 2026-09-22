@@ -105,7 +105,18 @@ class EmbeddingService:
         except Exception:
             self.multimodal_enabled = os.getenv("DASHSCOPE_MULTIMODAL_ENABLED", "true").lower() in ("1", "true", "yes", "y")
 
-        self.model = model or self.DEFAULT_MODEL
+        # 模型名可配置（B16）：换模型 = 换向量空间，必须配套重建 Qdrant 集合，
+        # 见 docs/plans/2026-09/embedding-rebuild-playbook.md
+        try:
+            from app.core.config import get_settings
+            settings = get_settings()
+            default_text_model = getattr(settings, "EMBEDDING_TEXT_MODEL", "") or self.DEFAULT_MODEL
+            self.multimodal_model = getattr(settings, "EMBEDDING_IMAGE_MODEL", "") or self.MULTIMODAL_MODEL
+        except Exception:
+            default_text_model = self.DEFAULT_MODEL
+            self.multimodal_model = self.MULTIMODAL_MODEL
+
+        self.model = model or default_text_model
         # 统一使用阿里云百炼 API Key 的 headers
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -400,7 +411,7 @@ class EmbeddingService:
                 # SDK 是同步调用，包装到线程池
                 result = await asyncio.to_thread(
                     MultiModalEmbedding.call,
-                    model=self.MULTIMODAL_MODEL,
+                    model=self.multimodal_model,
                     input=[MultiModalEmbeddingItemImage(image=image_input, factor=1.0)],
                 )
                 break
