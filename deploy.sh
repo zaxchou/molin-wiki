@@ -86,6 +86,12 @@ deploy_wiki_code() {
   # 3. SCP 前端 dist
   tar_sync "$WIKI_LOCAL/frontend/dist" "$WIKI_REMOTE/frontend/dist" "frontend/dist/"
 
+  # 3b. 同步部署配置（B9 发现：deploy/ 从不同步，服务器上 Dockerfile 一直停留在
+  #     手写 pip 清单的旧版，rebuild 装不进 faiss/open-clip）。
+  #     nginx.conf 三站点共用生产配置，不在此自动覆盖——改动必须走人工部署流程
+  scp -q "$WIKI_LOCAL/deploy/Dockerfile" "$WIKI_LOCAL/deploy/docker-compose.yml" \
+    "$SSH_HOST:$WIKI_REMOTE/deploy/"
+
   # 4. 重启（backend + worker 共用热挂载代码，都要重启才吃到新代码）
   echo "  → docker restart ..."
   remote "cd $WIKI_REMOTE/deploy && sudo docker compose restart backend worker 2>&1 | tail -1"
