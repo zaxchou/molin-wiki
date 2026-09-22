@@ -257,6 +257,8 @@ router.beforeResolve(async (to, _from) => {
 
 // 全局路由守卫：自动设置页面标题
 router.afterEach((to) => {
+  // 题跋详情页标题由组件按作品名动态设置（useTibaDetail.selectImage），此处不覆盖
+  if (to.name === 'TibaDetail') return
   const pageTitle = to.meta?.title ? translate(to.meta.title) : ''
   const name = to.params?.name
   // 画家相关路由 → 动态标题："李鱓 - 作品 - 墨林百科"
