@@ -70,7 +70,11 @@ FORM_TYPES = [
 
 # ── VL配置 ───────────────────────────────────────────────────────────────────
 QWEN_API_KEY = os.getenv("QWEN_API_KEY", "")
-DASHSCOPE_BASE_URL = "https://dashcope.aliyuncs.com/api/v1"
+# B14: 弃 DashScope 原生 multimodal-generation API（原域名还有 dashcope 笔误，
+# 从未连通），改 OpenAI 兼容模式 chat/completions
+QWEN_COMPAT_URL = os.getenv(
+    "QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+).rstrip("/") + "/chat/completions"
 VL_TIMEOUT = 180.0
 
 
@@ -214,18 +218,17 @@ def _classify_by_vl(
 
     payload = {
         "model": "qwen-vl-plus",
-        "input": {
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"image": f"data:image/jpeg;base64,{b64}", "min_pixels": min_pixels, "max_pixels": max_pixels},
-                    {"text": prompt}
-                ]
-            }]
-        },
-        "parameters": {"result_format": "message"}
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/jpeg;base64,{b64}",
+                                "min_pixels": min_pixels, "max_pixels": max_pixels}},
+                {"type": "text", "text": prompt},
+            ]
+        }],
     }
-    url = f"{DASHSCOPE_BASE_URL}/services/aigc/multimodal-generation/generation"
+    url = QWEN_COMPAT_URL
     headers = {"Authorization": f"Bearer {QWEN_API_KEY}", "Content-Type": "application/json"}
 
     results = {}
@@ -240,14 +243,9 @@ def _classify_by_vl(
         vl_status = "ok"
 
         try:
-            choices = result.get("output", {}).get("choices", [])
+            choices = result.get("choices", [])
             if choices:
-                content_text = ""
-                for item in choices[0].get("message", {}).get("content", []):
-                    if isinstance(item, dict):
-                        content_text += item.get("text", "")
-                    elif isinstance(item, str):
-                        content_text += item
+                content_text = choices[0].get("message", {}).get("content", "") or ""
 
                 # 提取JSON
                 json_start = content_text.find("{")

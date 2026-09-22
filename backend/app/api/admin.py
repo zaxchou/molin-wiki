@@ -322,13 +322,20 @@ def create_subscription(
 @router.get("/config", response_model=ConfigOut)
 def get_config(admin: User = Depends(require_admin_role)):
     """返回当前系统的配额与模型配置（供管理面板展示）"""
+    # 展示当前实际生效的默认模型（跟随管理后台「AI 接口」开关），不再列硬编码
+    try:
+        from app.llm.providers import resolve_provider
+        _, _, _, active_model, _ = resolve_provider()
+        ai_model = active_model
+    except Exception:
+        ai_model = settings.DEEPSEEK_TEXT_MODEL
     return ConfigOut(
         free_ai_calls_per_month=settings.FREE_AI_CALLS_PER_MONTH,
         paid_ai_calls_per_month=settings.PAID_AI_CALLS_PER_MONTH,
         free_storage_bytes=settings.FREE_STORAGE_BYTES,
         paid_storage_bytes=settings.PAID_STORAGE_BYTES,
         free_library_limit=settings.FREE_LIBRARY_LIMIT,
-        ai_model=settings.SILICONFLOW_MODEL or settings.DEEPSEEK_TEXT_MODEL or "deepseek-v4-flash",
+        ai_model=ai_model,
     )
 
 

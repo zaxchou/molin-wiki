@@ -98,7 +98,7 @@ def resolve_provider(
                 {"thinking": {"type": "disabled"}})
     if name == "qwen":
         return (name, s.QWEN_API_KEY, s.QWEN_BASE_URL,
-                model or "qwen3.5-plus",
+                model or s.QWEN_MODEL,
                 {"enable_thinking": s.QWEN_THINKING_ENABLED})
     if name == "siliconflow":
         return (name, s.SILICONFLOW_API_KEY, "https://api.siliconflow.cn/v1",

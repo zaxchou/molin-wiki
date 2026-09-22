@@ -796,7 +796,7 @@ async def generate_travel_notes(name: str, editor=Depends(require_editor)):
 
         # 补充元数据
         parsed["generated_at"] = datetime.now().isoformat()
-        parsed["model"] = "deepseek-v3"
+        parsed["model"] = response.get("model") or "unknown"
 
         travel_json = json.dumps(parsed, ensure_ascii=False)
 
