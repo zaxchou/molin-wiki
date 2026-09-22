@@ -87,8 +87,11 @@ def resolve_provider(
     if name == "custom":
         if not _custom_ready(s):
             raise ProviderError("custom 供应商未配置：需在服务器 env 设置 AI_BASE_URL + AI_API_KEY")
+        if not (model or s.AI_MODEL):
+            raise ProviderError("custom 供应商未指定模型：请设置 AI_MODEL 或在管理后台填模型覆盖")
         return (name, s.AI_API_KEY, s.AI_BASE_URL.rstrip("/"),
-                model or s.AI_MODEL, {})
+                model or s.AI_MODEL,
+                {"thinking": {"type": "disabled"}})  # MiMo 等推理模型默认关思考，防 max_tokens 被 reasoning 吃光
     if name == "deepseek":
         return (name, s.DEEPSEEK_API_KEY, s.DEEPSEEK_BASE_URL,
                 model or s.DEEPSEEK_TEXT_MODEL,
