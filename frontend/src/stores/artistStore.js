@@ -25,8 +25,8 @@ export const useArtistStore = defineStore('artist', () => {
     return Date.now() - lastMetaTime.value > 30 * 60 * 1000
   }
 
-  async function loadMeta() {
-    if (!isMetaStale() && periods.value.length > 0 && schools.value.length > 0) return
+  async function loadMeta(force = false) {
+    if (!force && !isMetaStale() && periods.value.length > 0 && schools.value.length > 0) return
     const [pRes, sRes, lRes, ssRes] = await Promise.allSettled([
       artistsApi.periods(),
       artistsApi.schools(),

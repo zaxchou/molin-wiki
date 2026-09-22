@@ -396,7 +396,8 @@ def get_public_site_settings(db: Session = Depends(get_db)):
     rows = db.execute(
         text("SELECT key, value FROM site_settings ORDER BY key")
     ).fetchall()
-    result = {r[0]: r[1] for r in rows}
+    # hidden_artists 是管理开关（过滤在服务端完成），不对外暴露
+    result = {r[0]: r[1] for r in rows if r[0] != "hidden_artists"}
     result["readonly"] = "true" if settings.SITE_READONLY else "false"
     return {"settings": result}
 

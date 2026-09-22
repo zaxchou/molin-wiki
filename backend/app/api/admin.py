@@ -5,6 +5,7 @@
 不再依赖旧的 X-Admin-Key 方式。
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -508,6 +509,58 @@ def update_site_settings(
     db.commit()
     logger.info("管理员 %d 更新了站点设置", admin.id)
     return {"ok": True, "message": "站点设置已更新"}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 艺术家临时隐藏开关（列表级隐藏，随时可恢复）
+# ═══════════════════════════════════════════════════════════════════
+
+class HiddenArtistsUpdate(BaseModel):
+    names: list
+
+
+def _read_hidden(db: Session) -> list:
+    row = db.execute(text("SELECT value FROM site_settings WHERE key='hidden_artists'")).first()
+    if not row or not row[0]:
+        return []
+    try:
+        names = json.loads(row[0])
+        return [n.strip() for n in names if isinstance(n, str) and n.strip()]
+    except (ValueError, TypeError):
+        return []
+
+
+@router.get("/hidden-artists")
+def get_hidden_artists(
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin_role),
+):
+    """读取被临时隐藏的画家名单"""
+    return {"names": _read_hidden(db)}
+
+
+@router.put("/hidden-artists")
+def set_hidden_artists(
+    body: HiddenArtistsUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin_role),
+):
+    """更新被临时隐藏的画家名单（整表覆盖）"""
+    names = []
+    for n in body.names:
+        s = str(n).strip()
+        if s and s not in names:
+            names.append(s)
+    if len(names) > 200:
+        raise HTTPException(status_code=400, detail="隐藏名单最多 200 位")
+    db.execute(
+        text("INSERT INTO site_settings (key, value, updated_at) VALUES ('hidden_artists', :v, CURRENT_TIMESTAMP) "
+             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"),
+        {"v": json.dumps(names, ensure_ascii=False)},
+    )
+    db.commit()
+    logger.info("管理员 %d 更新隐藏画家名单: %s", admin.id, names)
+    return {"ok": True, "names": names}
 
 
 # ═══════════════════════════════════════════════════════════════════

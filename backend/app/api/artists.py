@@ -13,7 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel
-from sqlalchemy import func as sa_func, or_
+from sqlalchemy import func as sa_func, or_, text
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
@@ -28,6 +28,18 @@ from app.models.tiba_analysis import TibaAnalysis
 from app.models.artwork_library import ArtworkLibrary
 
 router = APIRouter(prefix="/artists", tags=["artists"])
+
+
+def _get_hidden_artists(db: Session) -> list:
+    """读取站点设置 hidden_artists（JSON 数组）——管理员临时隐藏的画家名单。"""
+    row = db.execute(text("SELECT value FROM site_settings WHERE key='hidden_artists'")).first()
+    if not row or not row[0]:
+        return []
+    try:
+        names = json.loads(row[0])
+        return [n.strip() for n in names if isinstance(n, str) and n.strip()]
+    except (ValueError, TypeError):
+        return []
 settings = get_settings()
 
 
@@ -122,6 +134,11 @@ async def list_artists(
     if verified_only:
         conditions.append(Artist.verified == 1)
 
+    # 管理员临时隐藏的画家不出现在列表中
+    hidden = _get_hidden_artists(db)
+    if hidden:
+        conditions.append(Artist.name.notin_(hidden))
+
     if dynasty:
         dynasties = [d.strip() for d in dynasty.split(",") if d.strip()]
         if dynasties:
@@ -189,13 +206,11 @@ async def list_artists(
 @router.get("/periods")
 async def list_artist_periods(db: Session = Depends(get_db)):
     """获取所有画家的朝代列表（用于分类筛选）"""
-    rows = (
-        db.query(Artist.dynasty)
-        .filter(Artist.dynasty.isnot(None), Artist.dynasty != "")
-        .order_by(Artist.dynasty)
-        .distinct()
-        .all()
-    )
+    hidden = _get_hidden_artists(db)
+    q = db.query(Artist.dynasty).filter(Artist.dynasty.isnot(None), Artist.dynasty != "")
+    if hidden:
+        q = q.filter(Artist.name.notin_(hidden))
+    rows = q.order_by(Artist.dynasty).distinct().all()
     periods = [r[0] for r in rows]
     return {"success": True, "periods": periods}
 
@@ -217,13 +232,11 @@ async def list_artist_schools():
 @router.get("/letter-index")
 async def get_letter_index(db: Session = Depends(get_db)):
     """返回艺术家姓名列表（前端用pinyin-pro库分组）"""
-    rows = (
-        db.query(Artist.name)
-        .filter(Artist.verified == 1, Artist.name.isnot(None))
-        .order_by(Artist.name)
-        .distinct()
-        .all()
-    )
+    hidden = _get_hidden_artists(db)
+    q = db.query(Artist.name).filter(Artist.verified == 1, Artist.name.isnot(None))
+    if hidden:
+        q = q.filter(Artist.name.notin_(hidden))
+    rows = q.order_by(Artist.name).distinct().all()
     names = [r[0] for r in rows]
     return {"success": True, "names": names}
 
@@ -231,18 +244,19 @@ async def get_letter_index(db: Session = Depends(get_db)):
 @router.get("/stats-summary")
 async def get_stats_summary(db: Session = Depends(get_db)):
     """返回各朝代/画派计数（用于侧边栏统计标签）"""
+    hidden = _get_hidden_artists(db)
     dynasty_counts = {}
-    rows = (
-        db.query(Artist.dynasty, sa_func.count().label("cnt"))
-        .filter(Artist.verified == 1, Artist.dynasty.isnot(None), Artist.dynasty != "")
-        .group_by(Artist.dynasty)
-        .order_by(sa_func.count().desc())
-        .all()
-    )
+    q = db.query(Artist.dynasty, sa_func.count().label("cnt")).filter(
+        Artist.verified == 1, Artist.dynasty.isnot(None), Artist.dynasty != "")
+    total_q = db.query(sa_func.count()).select_from(Artist).filter(Artist.verified == 1)
+    if hidden:
+        q = q.filter(Artist.name.notin_(hidden))
+        total_q = total_q.filter(Artist.name.notin_(hidden))
+    rows = q.group_by(Artist.dynasty).order_by(sa_func.count().desc()).all()
     for dynasty, cnt in rows:
         dynasty_counts[dynasty] = cnt
 
-    total_verified = db.query(sa_func.count()).select_from(Artist).filter(Artist.verified == 1).scalar()
+    total_verified = total_q.scalar()
 
     return {"success": True, "dynasty_counts": dynasty_counts, "total_verified": total_verified}
 

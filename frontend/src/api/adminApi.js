@@ -50,4 +50,11 @@ export const adminApi = {
   reanalyzeAllStatus() {
     return api.get('/admin/emotion-logs/reanalyze-all/status')
   },
+  // ── 艺术家临时隐藏开关 ──
+  getHiddenArtists() {
+    return api.get('/admin/hidden-artists')
+  },
+  setHiddenArtists(names) {
+    return api.put('/admin/hidden-artists', { names })
+  },
 }
