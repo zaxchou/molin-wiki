@@ -33,8 +33,11 @@
 
 ## P2 依赖与 CI 健康
 
-- [ ] **B8 依赖修复**:python-multipart 0.0.6→0.0.20+(CVE-2024-24762,与 Dockerfile 漂移);
-  torch 2.1.1→2.2.x(2.1 无 py3.12 轮子,本地装不上);passlib/bcrypt 版本冲突评估。
+- [x] **B8 依赖修复**:requirements.txt 对齐生产——python-multipart 0.0.6→0.0.20(CVE-2024-24762,
+  Dockerfile 早已 0.0.20,漂移在 requirements);torch 2.1.1→2.2.0 / torchvision 0.16.1→0.17.0
+  (2.1 无 py3.12 轮子;与 Dockerfile/生产容器完全一致,py3.12 轮子可用);
+  passlib/bcrypt 评估=死依赖(密码哈希实际走 hashlib pbkdf2,全仓库零 import),
+  requirements 与 Dockerfile 同步移除 passlib[bcrypt]==1.7.4。
 - [ ] **B9 CI 修正**:test.yml 手写 pip 列表与 requirements.txt 漂移 → 改用 requirements.txt;
   加 pip 缓存;compose worker 显式 image 名、qdrant 锁版。
   ⚠️ 附:deploy.sh 的 tar 同步只覆盖/新增、不传播删除——B4 已手动清理服务器残留;

@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir \
     PyMuPDF==1.25.5 scikit-learn==1.3.2 scipy==1.11.4 \
     pydantic==2.10.4 pydantic-settings==2.1.0 \
     alembic==1.12.1 PyJWT==2.10.1 \
-    passlib[bcrypt]==1.7.4 dashscope>=1.20.0
+    dashscope>=1.20.0
 
 RUN pip install --no-cache-dir torch==2.2.0 torchvision==0.17.0
 
