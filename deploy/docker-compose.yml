@@ -19,6 +19,10 @@ services:
     environment:
       # v2.0 §2.3: web 进程不再内嵌 worker 线程，由独立 worker service 消费队列
       TIBA_EMBEDDED_WORKER: "false"
+      # .env 里的 localhost 只适用于本地宿主机开发；容器内必须走 compose 服务名。
+      # 环境变量优先于 .env（pydantic-settings 顺序），此前容器内连 localhost:6333
+      # 失败被静默吞掉 → 知识库搜索/图像搜索在生产返回 0 条（2026-09-22 修复）
+      QDRANT_URL: http://qdrant:6333
     depends_on:
       qdrant:
         condition: service_started
@@ -29,6 +33,8 @@ services:
     image: deploy-backend
     restart: always
     command: ["python", "-m", "app.worker_main"]
+    environment:
+      QDRANT_URL: http://qdrant:6333
     volumes:
       - /opt/molin-wiki/backend:/app
       - ../backend/data:/app/data
