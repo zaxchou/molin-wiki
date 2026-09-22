@@ -75,4 +75,5 @@
 | B4 死代码清理(-11872 行) | ✅ 2026-09-22 | 1ebe019 |
 | B5 metadata_extractor 迁网关 | ✅ 2026-09-22 | fc4eb40 |
 | B6 tiba_worker 修断链+迁网关 | ✅ 2026-09-22 | fc4eb40 |
-| B7~B16 | 待做 | — |
+| B7 artists/artist_rules 异步化 | ✅ 2026-09-22 | f69a368 |
+| B8~B16 | 待做 | — |
