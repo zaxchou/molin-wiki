@@ -67,6 +67,42 @@
       </div>
     </div>
 
+    <!-- 艺术家隐藏管理卡片 -->
+    <div class="ss-card" v-loading="hideLoading">
+      <div class="ss-section" style="margin-bottom: 0;">
+        <h3 class="ss-section-title">艺术家隐藏管理</h3>
+        <p class="ss-desc" style="margin: 0 0 14px;">从公开艺术家列表中临时移除指定画家（列表、推荐、拼音导航、统计同步隐藏）。详情页直链不受影响，随时可恢复。</p>
+        <div class="ss-ai-row">
+          <div class="ss-field" style="flex: 1;">
+            <label class="ss-label">选择要隐藏的画家（{{ hideCandidates.length }} 位可选）</label>
+            <input class="ss-input" v-model="hideFilter" placeholder="输入名字过滤，如：刘海勇" />
+            <select class="ss-input ss-hide-select" v-model="pendingHide" size="8">
+              <option v-for="a in hideCandidates" :key="a.name" :value="a.name">
+                {{ a.name }}{{ a.dynasty ? ' · ' + a.dynasty : '' }}
+              </option>
+            </select>
+          </div>
+          <div class="ss-field" style="flex: 1;">
+            <label class="ss-label">已隐藏（{{ hiddenNames.length }}）</label>
+            <div class="ss-hidden-list">
+              <div v-if="!hiddenNames.length" class="ss-hint">暂无被隐藏的画家</div>
+              <div v-for="n in hiddenNames" :key="n" class="ss-hidden-chip">
+                <span>{{ n }}</span>
+                <button class="ss-hidden-x" title="恢复显示" @click="restoreArtist(n)">×</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="ss-actions" style="margin-top: 16px; padding-top: 16px;">
+          <button class="ss-btn-save" :disabled="!pendingHide || hideSaving" @click="hideSelected">
+            <el-icon v-if="hideSaving" class="is-loading"><Loading /></el-icon>
+            {{ hideSaving ? '保存中...' : '隐藏所选画家' }}
+          </button>
+          <span v-if="hideMsg" class="ss-msg" :class="{ error: hideMsgErr }">{{ hideMsg }}</span>
+        </div>
+      </div>
+    </div>
+
     <div class="ss-card" v-loading="loading">
       <!-- 错误提示 -->
       <div v-if="loadError" class="ss-alert ss-alert-error">
@@ -143,9 +179,75 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { WarningFilled, Loading } from '@element-plus/icons-vue'
 import api from '../../api'
+import { useArtistStore } from '../../stores/artistStore'
+
+const artistStore = useArtistStore()
+
+// ── 艺术家隐藏管理 ──
+const hiddenNames = ref([])
+const allArtists = ref([])
+const hideFilter = ref('')
+const pendingHide = ref('')
+const hideSaving = ref(false)
+const hideLoading = ref(false)
+const hideMsg = ref('')
+const hideMsgErr = ref(false)
+
+const hideCandidates = computed(() => {
+  const kw = hideFilter.value.trim()
+  const hidden = new Set(hiddenNames.value)
+  return allArtists.value.filter(a => !hidden.has(a.name) && (!kw || a.name.includes(kw)))
+})
+
+async function loadHiddenArtists() {
+  hideLoading.value = true
+  try {
+    const [h, list] = await Promise.all([
+      api.get('/admin/hidden-artists'),
+      api.get('/artists', { params: { page_size: 500 } }),
+    ])
+    hiddenNames.value = h.names || []
+    allArtists.value = (list.artists || []).map(a => ({ name: a.name, dynasty: a.dynasty }))
+  } catch (e) {
+    hideMsg.value = e.response?.data?.detail || '加载隐藏名单失败'
+    hideMsgErr.value = true
+  } finally {
+    hideLoading.value = false
+  }
+}
+
+async function saveHidden(names, okMsg) {
+  hideSaving.value = true
+  hideMsg.value = ''
+  hideMsgErr.value = false
+  try {
+    const res = await api.put('/admin/hidden-artists', { names })
+    hiddenNames.value = res.names || names
+    // 让公开艺术家页的列表/字母导航/统计立即失效，跳转过去即为最新状态
+    artistStore.lastFetchTime = 0
+    artistStore.loadMeta(true)
+    hideMsg.value = okMsg
+  } catch (e) {
+    hideMsg.value = e.response?.data?.detail || '保存失败'
+    hideMsgErr.value = true
+  } finally {
+    hideSaving.value = false
+  }
+}
+
+function hideSelected() {
+  if (!pendingHide.value) return
+  const name = pendingHide.value
+  pendingHide.value = ''
+  saveHidden([...hiddenNames.value, name], `已隐藏：${name}`)
+}
+
+function restoreArtist(name) {
+  saveHidden(hiddenNames.value.filter(n => n !== name), `已恢复显示：${name}`)
+}
 
 const loading = ref(true)
 const saving = ref(false)
@@ -247,6 +349,7 @@ function onFieldChange() {
 }
 
 onMounted(async () => {
+  loadHiddenArtists()
   await load()
   loadAI()
 })
@@ -555,6 +658,51 @@ async function save() {
   color: #c45a3c;
 }
 .ss-btn-reset:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── 艺术家隐藏管理 ── */
+.ss-hide-select {
+  margin-top: 8px;
+  height: 170px;
+  padding: 6px 8px;
+}
+
+.ss-hidden-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 170px;
+  align-content: flex-start;
+  padding: 10px 12px;
+  border: 1px solid #e4e0d6;
+  border-radius: 8px;
+  background: #fafaf7;
+}
+
+.ss-hidden-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: #f3ede2;
+  border: 1px solid #dbd3c2;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #3a3222;
+}
+
+.ss-hidden-x {
+  border: none;
+  background: transparent;
+  color: #a89f8a;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.ss-hidden-x:hover {
+  color: #c45a3c;
+}
 
 .ss-msg {
   font-size: 13px;

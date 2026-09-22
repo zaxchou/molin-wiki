@@ -26,26 +26,6 @@
       </div>
 
       <PinyinNav :groups="store.letterGroups" :active-letter="activeLetter" @select="onLetterSelect" />
-
-      <!-- 管理员：艺术家临时隐藏开关 -->
-      <div v-if="authStore.isAdmin" class="al-admin-row">
-        <el-select
-          v-model="pendingHide"
-          :placeholder="$t('artistlist.h1')"
-          clearable
-          filterable
-          class="al-hide-select"
-          @change="hideArtist"
-        >
-          <el-option v-for="a in hideCandidates" :key="a.id || a.name" :label="$t(a.name)" :value="a.name" />
-        </el-select>
-        <template v-if="hiddenNames.length">
-          <span class="al-hidden-label">{{ $t('artistlist.h2') }}（{{ hiddenNames.length }}）:</span>
-          <el-tag v-for="n in hiddenNames" :key="n" closable size="small" @close="restoreArtist(n)">
-            {{ $t(n) }}
-          </el-tag>
-        </template>
-      </div>
     </div>
 
     <div v-if="loading" class="al-loading">{{ $t('common.loading') }}</div>
@@ -75,19 +55,14 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
 import { pinyin } from 'pinyin-pro'
 import { useArtistStore } from '../stores/artistStore'
-import { useAuthStore } from '../stores/authStore'
-import { adminApi } from '../api/adminApi'
-import { translate as t } from '@/locales'
 import ArtistTimeline from '../components/artist/ArtistTimeline.vue'
 import PinyinNav from '../components/artist/PinyinNav.vue'
 import { artistsApi } from '../api/artists'
 
 const router = useRouter()
 const store = useArtistStore()
-const authStore = useAuthStore()
 
 const keyword = ref('')
 const dynastyFilters = ref([])
@@ -214,62 +189,8 @@ function goToArtist(name) {
   router.push({ name: 'ArtistOverview', params: { name } })
 }
 
-// ── 艺术家临时隐藏（管理员） ──
-const hiddenNames = ref([])
-const pendingHide = ref('')
-
-const hideCandidates = computed(() => {
-  const seen = new Set()
-  const out = []
-  for (const a of [...featuredArtists.value, ...store.list]) {
-    if (a?.name && !seen.has(a.name)) {
-      seen.add(a.name)
-      out.push(a)
-    }
-  }
-  return out
-})
-
-async function loadHidden() {
-  if (!authStore.isAdmin) return
-  try {
-    const res = await adminApi.getHiddenArtists()
-    hiddenNames.value = res.names || []
-  } catch (e) {
-    console.error(e)
-  }
-}
-
-async function refreshAfterToggle() {
-  store.lastFetchTime = 0 // 让列表缓存失效
-  await store.loadMeta(true)
-  await Promise.all([doLoad(), fetchFeatured()])
-}
-
-async function saveHidden(names, message) {
-  try {
-    const res = await adminApi.setHiddenArtists(names)
-    hiddenNames.value = res.names || names
-    await refreshAfterToggle()
-    ElMessage.success(message)
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.detail || '操作失败')
-  }
-}
-
-function hideArtist(name) {
-  if (!name) return
-  pendingHide.value = ''
-  saveHidden([...hiddenNames.value, name], `${t('artistlist.h4')}: ${name}`)
-}
-
-function restoreArtist(name) {
-  saveHidden(hiddenNames.value.filter(n => n !== name), `${t('artistlist.h5')}: ${name}`)
-}
-
 onMounted(async () => {
   await store.loadMeta()
-  loadHidden()
   await Promise.all([doLoad(), fetchFeatured()])
 })
 
@@ -341,22 +262,6 @@ onUnmounted(() => {
   padding: 80px 0;
   color: #8a8578;
   font-size: 0.9rem;
-}
-
-.al-admin-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.al-hide-select {
-  width: 260px;
-}
-
-.al-hidden-label {
-  font-size: 0.82rem;
-  color: #8a8578;
 }
 
 .al-featured {
