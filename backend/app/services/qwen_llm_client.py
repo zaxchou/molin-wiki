@@ -8,11 +8,27 @@
 本模块保留旧签名（返回 dict，错误以 {"error": ...} 表达）以兼容存量调用方。
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.llm import LLMError, chat_completion, chat_completion_async
 
 logger = logging.getLogger(__name__)
+
+
+def get_text_llm_config() -> Tuple[str, str, str]:
+    """获取当前文本 LLM 配置，返回 (api_key, base_url, model)。
+
+    网关重构前的存量签名，内部改走统一网关的 resolve_provider——
+    自动跟随管理后台「AI 接口」开关（MiMo/custom 等），不再写死 DeepSeek→Qwen。
+    无可用供应商时返回空三元组（调用方按旧有的 HTTP 失败路径兜底），不抛异常。
+    """
+    try:
+        from app.llm.providers import resolve_provider
+        _, api_key, base_url, model, _ = resolve_provider()
+        return api_key, base_url, model
+    except Exception as e:
+        logger.warning("get_text_llm_config: 无可用 LLM 配置: %s", e)
+        return "", "", ""
 
 
 def call_qwen_chat(

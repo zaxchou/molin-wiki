@@ -202,8 +202,8 @@ async def run_calibration(
 # ── 辅助函数 ──────────────────────────────────────────────────────────
 
 def _save_lexicon(lexicon):
-    """保存词典到文件"""
-    lexicon_path = os.path.join(os.path.dirname(__file__), "..", "services", "emotion_lexicon.json")
+    """保存词典到文件（v3 是运行时加载的唯一路径，见 emotion_lexicon_loader）"""
+    lexicon_path = os.path.join(os.path.dirname(__file__), "..", "services", "emotion_lexicon_v3.json")
     lexicon_path = os.path.normpath(lexicon_path)
 
     data = {
