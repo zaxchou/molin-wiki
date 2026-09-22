@@ -287,50 +287,24 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), user: Op
     import traceback
 
     try:
-        # ---- ① Query 改写（异步，不阻塞主流程）----
-        from .query_rewriter import rewrite_query
-        try:
-            rewrite_result = await asyncio.wait_for(
-                rewrite_query(request.query), timeout=10.0
-            )
-        except asyncio.TimeoutError:
-            logger.warning("Query 改写超时(10s)，使用原始查询")
-            rewrite_result = {"original": request.query, "rewrites": [], "intent": "综合"}
-        except Exception as e:
-            logger.warning("Query 改写异常: %s，使用原始查询", e)
-            rewrite_result = {"original": request.query, "rewrites": [], "intent": "综合"}
-
-        rewritten_queries = rewrite_result.get("rewrites", [])
-        query_intent = rewrite_result.get("intent", "综合")
-        all_queries = [request.query] + rewritten_queries
-
-        logger.info("搜索查询: 原始='%s', 改写=%s, 意图=%s",
-                   request.query, rewritten_queries, query_intent)
-
-        # ---- ② 对所有查询分别做混合搜索，合并去重 ----
+        # ---- ① 混合搜索（单查询；B12 移除 LLM query 改写——hybrid_search 已有短查询自适应，
+        #      改写引入最多 10s 额外延迟与 N 倍 embedding/Qdrant 调用，收益为负）----
         embedding_service = EmbeddingService()
         seen_ids = set()  # 用 vector_id 去重
         merged_results = []
 
-        for q in all_queries:
-            embed_result = await embedding_service.embed_text(q)
-            q_embedding = embed_result.embedding if embed_result else None
-            if not q_embedding:
-                continue
-
-            # 搜索文本集合
+        embed_result = await embedding_service.embed_text(request.query)
+        q_embedding = embed_result.embedding if embed_result else None
+        if q_embedding:
             hybrid_results = await do_hybrid_search(
-                query_text=q,
+                query_text=request.query,
                 query_vector=q_embedding,
                 collection=qdrant_client.KNOWLEDGE_TEXTS_COLLECTION,
                 limit=request.limit,
             )
-
-            for r in hybrid_results:
-                vid = r.get("id")
-                if vid and vid not in seen_ids:
-                    seen_ids.add(vid)
-                    merged_results.append(r)
+            merged_results.extend(hybrid_results)
+        else:
+            logger.warning("查询 embedding 失败: %s", request.query)
 
         # ---- ②.5 跨模态搜索：用 multimodal-embedding-v1 文本向量搜索图像集合 ----
         if embedding_service.multimodal_enabled and embedding_service.api_key:
@@ -341,51 +315,51 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), user: Op
 
                 dashscope.api_key = embedding_service.api_key
 
-                for q in all_queries[:3]:  # 最多3个查询做图像搜索，控制API调用量
-                    try:
-                        mm_result = await asyncio.to_thread(
-                            MultiModalEmbedding.call,
-                            model="multimodal-embedding-v1",
-                            input=[MultiModalEmbeddingItemText(text=q, factor=1.0)],
-                        )
-                        if mm_result.status_code != 200:
-                            logger.warning("跨模态文本 embedding 失败: %s", mm_result.message)
-                            continue
-
+                try:
+                    mm_result = await asyncio.to_thread(
+                        MultiModalEmbedding.call,
+                        model="multimodal-embedding-v1",
+                        input=[MultiModalEmbeddingItemText(text=request.query, factor=1.0)],
+                    )
+                    if mm_result.status_code != 200:
+                        logger.warning("跨模态文本 embedding 失败: %s", mm_result.message)
+                        mm_vec = None
+                    else:
                         mm_vec = mm_result.output["embeddings"][0]["embedding"]
-                        # 跨模态图像搜索：纯向量搜索（BM25 对图像帮助有限，且会挤掉 caption 为空的新图）
-                        # score_threshold=0.22: 跨模态余弦正常范围 0.19-0.23，低于此阈值视为噪声
-                        img_vec_results = qdrant_client.search_collection(
-                            qdrant_client.KNOWLEDGE_IMAGES_COLLECTION,
-                            mm_vec,
-                            limit=max(5, request.limit // 2),
-                            score_threshold=0.22,
-                        )
-                        img_results = [
-                            {"id": r.get("id"), "score": r.get("score", 0), "payload": r.get("payload", {})}
-                            for r in img_vec_results
-                        ]
+                except Exception as e:
+                    logger.warning("跨模态图像搜索失败(query='%s'): %s", request.query[:30], e)
+                    mm_vec = None
 
-                        for r in img_results:
-                            vid = r.get("id")
-                            if vid and vid not in seen_ids:
-                                seen_ids.add(vid)
-                                merged_results.append(r)
-                    except Exception as e:
-                        logger.warning("跨模态图像搜索失败(query='%s'): %s", q[:30], e)
+                if mm_vec:
+                    # 跨模态图像搜索：纯向量搜索（BM25 对图像帮助有限，且会挤掉 caption 为空的新图）
+                    # score_threshold=0.22: 跨模态余弦正常范围 0.19-0.23，低于此阈值视为噪声
+                    img_vec_results = qdrant_client.search_collection(
+                        qdrant_client.KNOWLEDGE_IMAGES_COLLECTION,
+                        mm_vec,
+                        limit=max(5, request.limit // 2),
+                        score_threshold=0.22,
+                    )
+                    img_results = [
+                        {"id": r.get("id"), "score": r.get("score", 0), "payload": r.get("payload", {})}
+                        for r in img_vec_results
+                    ]
+
+                    for r in img_results:
+                        vid = r.get("id")
+                        if vid and vid not in seen_ids:
+                            seen_ids.add(vid)
+                            merged_results.append(r)
             except ImportError:
                 logger.warning("dashscope SDK 未安装，跳过跨模态图像搜索")
 
         # ---- ②.6 Phase 3b: 私人知识库搜索 ----
         if request.include_private and user is not None:
             try:
-                for q in all_queries[:2]:  # 最多2个查询，控制 API 调用
-                    embed_result = await embedding_service.embed_text(q)
-                    q_embedding = embed_result.embedding if embed_result else None
-                    if not q_embedding:
-                        continue
+                embed_result = await embedding_service.embed_text(request.query)
+                p_embedding = embed_result.embedding if embed_result else None
+                if p_embedding:
                     private_results = qdrant_client.search_private(
-                        vector=q_embedding,
+                        vector=p_embedding,
                         user_id=user.id,
                         limit=request.limit,
                         score_threshold=0.6,
@@ -435,14 +409,15 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), user: Op
             logger.warning("DB??????: %s", e)
 
 
-        # 启发式精排（图像结果不参与精排，直接保留）
-        from .reranker import heuristic_rerank
+        # 精排（B12 收敛为 exact-match boost）：完整命中 query 的结果上浮，其余保持融合原序。
+        # 原 5 信号启发式把 RRF 分(~0.01)当余弦分(~0-1)混加，尺度失衡，已删
+        from .reranker import exact_match_boost
         IMAGE_TYPES = {"knowledge_figure", "pantianshou_illustration", "pdf_extracted_image"}
         text_results = [r for r in search_results if r.get("payload", {}).get("type") not in IMAGE_TYPES]
         image_results = [r for r in search_results if r.get("payload", {}).get("type") in IMAGE_TYPES]
 
         # 文本结果精排
-        reranked_texts = heuristic_rerank(request.query, text_results, top_k=request.limit)
+        reranked_texts = exact_match_boost(request.query, text_results, top_k=request.limit)
 
         # 图像结果：跨模态余弦分数 >= 0.25 才保留（0.22-0.24 属于弱相关，不放主结果列表）
         # 不强制保留最低数量，宁缺毋滥
@@ -993,10 +968,6 @@ async def search(request: SearchRequest, db: Session = Depends(get_db), user: Op
                 "sources": ai_summary.get("sources", []),
             },
             "related_images": related_images,
-            "query_rewrite": {
-                "rewrites": rewritten_queries,
-                "intent": query_intent,
-            },
         }
         # 写入内存缓存（TTL 300s），下次同查询秒回
         # Phase 3b: 含私人文档时不写入共享缓存

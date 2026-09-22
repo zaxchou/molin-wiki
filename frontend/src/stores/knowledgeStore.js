@@ -29,7 +29,6 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
   // AI 摘要
   const aiSummary = ref(null)
   const aiSummaryLoading = ref(false)
-  const queryRewrite = ref(null)
   const relatedImages = ref([])  // 相关配图（跨模态搜索结果中的图像）
   
   // 上传状态
@@ -298,7 +297,6 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     searchProgress.value = 0
     aiSummary.value = null
     aiSummaryLoading.value = false
-    queryRewrite.value = null
     relatedImages.value = []
 
     // 清除上一次搜索的进度条（避免并行搜索时泄漏）
@@ -327,9 +325,6 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
       // AI 摘要和改写信息（直接从响应获取，后端已并行完成）
       if (response.ai_summary && response.ai_summary.answer) {
         aiSummary.value = response.ai_summary
-      }
-      if (response.query_rewrite) {
-        queryRewrite.value = response.query_rewrite
       }
       // 相关配图
       if (response.related_images && response.related_images.length > 0) {
@@ -490,7 +485,6 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     searchResults.value = []
     searchQuery.value = ''
     aiSummary.value = null
-    queryRewrite.value = null
     relatedImages.value = []
   }
   
@@ -511,7 +505,6 @@ export const useKnowledgeStore = defineStore('knowledge', () => {
     searchHistory,
     aiSummary,
     aiSummaryLoading,
-    queryRewrite,
     relatedImages,
     uploadProgress,
     uploadStatus,
