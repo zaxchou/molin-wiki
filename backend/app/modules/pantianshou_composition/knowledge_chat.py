@@ -1,11 +1,9 @@
 ﻿"""
-知识库 RAG 聊天 — DeepSeek Flash 流式 SSE
-
-替代 bailian_service.py，用 Qdrant 向量搜索 + DeepSeek Flash 实现快速流式问答。
+知识库 RAG 聊天 — LLM 网关流式 SSE
 
 流程:
     用户提问 + 对话历史 → Qdrant 搜索相关文本块 → 构建 RAG 上下文 →
-    DeepSeek Flash 流式生成 → SSE 逐字输出
+    统一网关流式生成（跟随管理后台 AI 供应商开关）→ SSE 逐字输出
 """
 from __future__ import annotations
 
@@ -16,26 +14,12 @@ import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-import httpx
 from sqlalchemy import text as sql_text
 
-from app.core.config import get_settings
 from app.core.database import SessionLocal
+from app.llm import LLMError, chat_completion_stream_async
 
 logger = logging.getLogger(__name__)
-
-# 单例 httpx.AsyncClient（复用连接池，避免每次请求建新连接）
-_async_client: Optional[httpx.AsyncClient] = None
-
-
-def _get_async_client() -> httpx.AsyncClient:
-    """获取全局 AsyncClient 单例"""
-    global _async_client
-    if _async_client is None or _async_client.is_closed:
-        _async_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=10.0),
-        )
-    return _async_client
 
 # RAG 聊天 system prompt
 SYSTEM_PROMPT = """你是「小墨」，一位精通中国画的专业知识助手，专注于写意花鸟画、构图法则、笔墨技法等问题解答。
@@ -491,15 +475,6 @@ async def chat_stream(
         user_id: 用户ID（用于持久化）
         session_id: 会话ID（用于持久化）
     """
-    settings = get_settings()
-    api_key = settings.DEEPSEEK_API_KEY
-    base_url = settings.DEEPSEEK_BASE_URL
-    model = settings.DEEPSEEK_TEXT_MODEL
-
-    if not api_key:
-        yield _sse_event("error", {"message": "DeepSeek API Key 未配置"})
-        return
-
     # ① 搜索 Qdrant — 追问时补充上一轮主题词
     t0 = time.time()
     search_query = query
@@ -554,79 +529,30 @@ async def chat_stream(
     # ③ 构建完整消息
     messages = _build_messages(query, rag_context, history, artist_name=artist_name, lang=lang)
 
-    # ④ 调用 DeepSeek Flash 流式
-    url = f"{base_url}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    body = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.3,
-        "max_tokens": 4096,
-        "stream": True,
-        "thinking": {"type": "disabled"},
-    }
-
+    # ④ 调用统一网关流式（跟随管理后台 AI 供应商开关）
     t_llm = time.time()
     full_text = []
+    first_token = True
 
     try:
-        client = _get_async_client()
-        async with client.stream("POST", url, headers=headers, json=body) as resp:
-            if resp.status_code != 200:
-                error_body = ""
-                try:
-                    error_body = (await resp.aread()).decode()[:500]
-                except Exception:
-                    pass
-                logger.error(
-                    "DeepSeek API 错误: status=%d, body=%s",
-                    resp.status_code, error_body,
+        async for content in chat_completion_stream_async(
+            messages=messages, max_tokens=4096, temperature=0.3,
+        ):
+            if first_token:
+                ttft = (time.time() - t_llm) * 1000
+                logger.info(
+                    "[RAG聊天] 首 token: query='%s', ttft=%.0fms, 搜索=%.2fs",
+                    query[:50], ttft, search_elapsed,
                 )
-                yield _sse_event("error", {
-                    "message": f"API 调用失败 (HTTP {resp.status_code})",
-                })
-                return
-
-            first_token = True
-            async for line in resp.aiter_lines():
-                if not line or not line.startswith("data: "):
-                    continue
-                data_str = line[6:].strip()
-                if data_str == "[DONE]":
-                    break
-
-                try:
-                    data = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
-
-                choices = data.get("choices", [])
-                if not choices:
-                    continue
-
-                delta = choices[0].get("delta", {})
-                content = delta.get("content", "")
-                if content:
-                    if first_token:
-                        ttft = (time.time() - t_llm) * 1000
-                        logger.info(
-                            "[RAG聊天] 首 token: query='%s', ttft=%.0fms, "
-                            "搜索=%.2fs",
-                            query[:50], ttft, search_elapsed,
-                        )
-                        first_token = False
-                    full_text.append(content)
-                    yield _sse_event("text", {"content": content})
-
-    except httpx.TimeoutException:
-        logger.warning("DeepSeek API 超时")
-        yield _sse_event("error", {"message": "请求超时，请重试"})
+                first_token = False
+            full_text.append(content)
+            yield _sse_event("text", {"content": content})
+    except LLMError as e:
+        logger.error("RAG 聊天 LLM 流式失败: %s", e)
+        yield _sse_event("error", {"message": str(e)[:200]})
         return
     except Exception as e:
-        logger.error("DeepSeek API 流式调用异常: %s", e, exc_info=True)
+        logger.error("RAG 聊天流式调用异常: %s", e, exc_info=True)
         yield _sse_event("error", {"message": f"服务异常: {str(e)}"})
         return
 

@@ -7,7 +7,6 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
-import httpx
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -32,13 +31,6 @@ def _encode_image_to_base64(image_path: str, max_side: int = 1024, quality: int 
         img.save(buf, format="JPEG", quality=quality, optimize=True)
         data = buf.getvalue()
         return base64.b64encode(data).decode("utf-8")
-
-
-def _build_chat_url(base_url: str) -> str:
-    base = (base_url or "").rstrip("/")
-    if base.endswith("/chat/completions"):
-        return base
-    return f"{base}/chat/completions"
 
 
 def extract_qczh_coords(llm_text: str) -> dict | None:
@@ -246,45 +238,37 @@ def generate_composition_narrative(
         "temperature": 0.5,
     }
 
-    url = _build_chat_url(settings.QWEN_BASE_URL)
-    headers = {"Authorization": f"Bearer {settings.QWEN_API_KEY}", "Content-Type": "application/json"}
+    # B13: 走统一网关（连接复用/统一重试/计量），视觉消息原样透传
+    from app.llm import chat_completion as gateway_chat
+
+    def _call(_model: str) -> Dict[str, Any]:
+        data = gateway_chat(
+            messages=payload["messages"],
+            provider="qwen",
+            model=_model,
+            max_tokens=int(getattr(settings, "COMPOSITION_LLM_MAX_TOKENS", 8192)),
+            temperature=0.5,
+            timeout=120.0,
+        )
+        choice = data["choices"][0]
+        finish_reason = choice.get("finish_reason", "")
+        text = (choice["message"]["content"] or "").strip()
+        if text.startswith("```"):
+            text = text.lstrip("`").strip()
+        text = _postprocess_text(text, example_images, dimension_scores=dimension_scores)
+        if finish_reason == "length":
+            text += chr(10) + chr(10) + "> ⚠️ *（内容因长度限制被截断，部分分析未完整输出）*"
+        return text
 
     try:
-        with httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0, read=110.0, write=30.0)) as client:
-            r = client.post(url, headers=headers, json=payload)
-            r.raise_for_status()
-            data = r.json()
-            choice = data["choices"][0]
-            content = choice["message"]["content"]
-            finish_reason = choice.get("finish_reason", "")
-            text = (content or "").strip()
-            if text.startswith("```"):
-                text = text.lstrip("`").strip()
-            raw_text = text
-            text = _postprocess_text(text, example_images, dimension_scores=dimension_scores)
-            if finish_reason == "length":
-                text += "\n\n> ⚠️ *（内容因长度限制被截断，部分分析未完整输出）*"
-            return {"ok": True, "model": model, "text": text, "finish_reason": finish_reason, "_raw_text": raw_text, "prompt": prompt}
+        text = _call(model)
+        return {"ok": True, "model": model, "text": text, "finish_reason": "stop", "_raw_text": text, "prompt": prompt}
     except Exception as e:
         fallback = (settings.QWEN_MODEL or "").strip()
         if fallback and fallback != model:
-            payload["model"] = fallback
             try:
-                with httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0, read=110.0, write=30.0)) as client:
-                    r = client.post(url, headers=headers, json=payload)
-                    r.raise_for_status()
-                    data = r.json()
-                    choice = data["choices"][0]
-                    content = choice["message"]["content"]
-                    finish_reason = choice.get("finish_reason", "")
-                    text = (content or "").strip()
-                    if text.startswith("```"):
-                        text = text.lstrip("`").strip()
-                    raw_text = text
-                    text = _postprocess_text(text, example_images, dimension_scores=dimension_scores)
-                    if finish_reason == "length":
-                        text += "\n\n> ⚠️ *（内容因长度限制被截断，部分分析未完整输出）*"
-                    return {"ok": True, "model": fallback, "text": text, "finish_reason": finish_reason, "_raw_text": raw_text, "prompt": prompt}
+                text = _call(fallback)
+                return {"ok": True, "model": fallback, "text": text, "finish_reason": "stop", "_raw_text": text, "prompt": prompt}
             except Exception:
                 pass
         return {"ok": False, "error": str(e), "model": model}

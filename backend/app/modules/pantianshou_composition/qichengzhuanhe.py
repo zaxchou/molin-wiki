@@ -722,24 +722,6 @@ def _parse_llm_result(llm_result: dict, w: int, h: int, *, guided_analysis_text:
     }
 
 
-QWEN_QCZH_PRE_PROMPT = """你是中国画构图分析专家。请基于以下知识，用简洁的自然语言分析这幅画作的起承转合关系。
-
-【写意知识库原文（潘天寿《关于构图问题》+《中国写意花鸟画教程》相关原文）】
-{knowledge_context}
-
-【用户自定义起承转合知识】
-{user_markdown}
-
-请根据以上知识规则，分析：
-1. **起**：视觉从哪里进入画面？在画面什么位置（如左下角、右上边缘等）？所对应物象是什么？
-2. **承**：视线如何承接发展？在中途经过了哪些关键物象？
-3. **转**：画面何处发生了方向或节奏的转折？什么元素造成了变化？
-4. **合**：画面在何处收束？收束点与题款、印章有什么关系？
-5. **整体走势形态**：之字形、对角线、三段式、边角、中心辐射等？
-
-请直接描述，不要输出JSON。控制在400字以内。"""
-
-
 def _get_knowledge_cache_path() -> str:
     import os as _os
     data_dir = _os.path.normpath(_os.path.join(
@@ -803,56 +785,6 @@ except Exception:
     pass
 
 
-def _qwen_qczh_pre_analysis(img_bgr: np.ndarray) -> str | None:
-    """调用 Qwen 多模态模型对图像做初步起承转合文字分析（含写意知识库+用户自定义知识注入）。"""
-    import time as _time
-    try:
-        if not (settings.QWEN_ENABLED and settings.QWEN_API_KEY and settings.QWEN_BASE_URL):
-            return None
-    except Exception:
-        return None
-
-    from app.modules.pantianshou_composition.user_markdown import load_user_qczh_markdowns, build_user_markdown_context
-    user_markdowns = load_user_qczh_markdowns()
-    user_md_context = build_user_markdown_context(user_markdowns, max_total=1200)
-    knowledge_context = _fetch_qczh_knowledge_context()
-    logger.info("QCZH pre-analysis: loaded %d user markdown files (%d chars), knowledge=%d chars",
-                len(user_markdowns), len(user_md_context), len(knowledge_context))
-
-    prompt = QWEN_QCZH_PRE_PROMPT.format(
-        knowledge_context=knowledge_context,
-        user_markdown=user_md_context,
-    )
-
-    b64 = encode_bgr_to_base64(img_bgr, max_side=1024)
-    qwen_model = getattr(settings, "QWEN_MODEL", "qwen3.5-plus").strip() or "qwen3.5-plus"
-    qwen_url = _build_chat_url(settings.QWEN_BASE_URL)
-    payload = {
-        "model": qwen_model,
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        ]}],
-        "stream": False, "max_tokens": 1024, "temperature": 0.15,
-    }
-    headers = {"Authorization": f"Bearer {settings.QWEN_API_KEY}", "Content-Type": "application/json"}
-    for attempt in range(2):
-        try:
-            with httpx.Client(timeout=httpx.Timeout(90.0, connect=10.0)) as client:
-                r = client.post(qwen_url, json=payload, headers=headers)
-                r.raise_for_status()
-                data = r.json()
-                text = (data["choices"][0]["message"].get("content") or "").strip()
-                if text:
-                    logger.info("Qwen QCZH pre-analysis OK: %d chars, model=%s", len(text), qwen_model)
-                    return text
-        except Exception as e:
-            logger.warning("Qwen QCZH pre-analysis attempt %d failed: %s", attempt + 1, e)
-            if attempt < 1:
-                _time.sleep(1)
-    return None
-
-
 def analyze_qichengzhuanhe(img_bgr: np.ndarray, *, llm_analysis_text: str | None = None) -> Dict[str, Any]:
     """
     核心起承转合分析函数（同步）— 统一入口。
@@ -887,17 +819,11 @@ def analyze_qichengzhuanhe(img_bgr: np.ndarray, *, llm_analysis_text: str | None
         guided_text = llm_analysis_text
         logger.info("QCZH guided mode: using LLM analysis text (%d chars)", len(llm_analysis_text))
     else:
-        qwen_text = _qwen_qczh_pre_analysis(img_bgr)
-        if qwen_text:
-            prompt = GUIDED_QCZH_PROMPT_TEMPLATE.format(
-                llm_analysis=qwen_text[:2000]
-            )
-            guided_text = qwen_text
-            logger.info("QCZH standalone → guided: Qwen pre-analysis (%d chars)", len(qwen_text))
-        else:
-            prompt = QICHENGZHUANHE_PROMPT
-            guided_text = ""
-            logger.info("QCZH standalone fallback: using full comprehensive prompt")
+        # B13: standalone 直接用完整学术 prompt 一次视觉调用，
+        # 不再做"Qwen 预分析 + 主调"双次视觉级联（延迟翻倍、成本翻倍）
+        prompt = QICHENGZHUANHE_PROMPT
+        guided_text = ""
+        logger.info("QCZH standalone: using full comprehensive prompt")
 
     payload = {
         "model": model,

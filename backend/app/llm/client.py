@@ -205,3 +205,63 @@ async def chat_completion_async(
     return await _chat_request_async(name, api_key, base_url, resolved_model, messages,
                                      max_tokens, temperature, body_defaults, extra_body,
                                      retries, timeout)
+
+
+async def chat_completion_stream_async(
+    messages: List[Dict[str, str]],
+    *,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    max_tokens: int = 300,
+    temperature: float = 0.1,
+    extra_body: Optional[Dict[str, Any]] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+):
+    """异步流式 Chat Completions。逐段 yield 文本增量；流开始前失败抛 LLMError。
+
+    流中途的网络中断以 LLMError 终止迭代（已产出的增量由调用方决定去留）。
+    """
+    import json as _json
+
+    name, api_key, base_url, resolved_model, body_defaults = resolve_provider(provider, model)
+    body = _build_body(resolved_model, messages, max_tokens, temperature, body_defaults, extra_body)
+    body["stream"] = True
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    start = time.monotonic()
+    try:
+        async with _get_async_client().stream(
+            "POST", f"{base_url}/chat/completions",
+            headers=headers, json=body, timeout=timeout,
+        ) as resp:
+            if resp.status_code != 200:
+                error_body = ""
+                try:
+                    error_body = (await resp.aread()).decode(errors="replace")[:200]
+                except Exception:
+                    pass
+                raise LLMError(
+                    f"LLM 流式调用失败（{name}:{resolved_model}）: HTTP {resp.status_code}: {error_body}")
+
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    data = _json.loads(payload)
+                except _json.JSONDecodeError:
+                    continue
+                choices = data.get("choices") or []
+                if not choices:
+                    continue
+                piece = (choices[0].get("delta") or {}).get("content")
+                if piece:
+                    yield piece
+        record(name, resolved_model, time.monotonic() - start, True)
+    except LLMError:
+        raise
+    except Exception as e:
+        record(name, resolved_model, time.monotonic() - start, False, error=str(e)[:200])
+        raise LLMError(f"LLM 流式调用失败（{name}:{resolved_model}）: {str(e)[:200]}")
