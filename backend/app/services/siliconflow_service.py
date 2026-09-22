@@ -5,10 +5,10 @@ import json
 import time
 from typing import List, Dict, Optional, Tuple
 import io
-import re
 from PIL import Image
 
 from app.core.config import get_settings
+from app.llm import parse_json_loose
 
 # logger = logging.getLogger(__name__)  # 彻底禁用，避免 name 'logger' is not defined 问题！！
 settings = get_settings()
@@ -75,322 +75,52 @@ def _extract_complete_json_array(content: str, array_key: str) -> Optional[list]
         print(f"DEBUG: _extract_complete_json_array: {array_key} parsed, {len(result) if result else 0} items")
         return result
     except json.JSONDecodeError as e:
-        print(f"DEBUG: _extract_complete_json_array: {array_key} parse failed, try extract first N: {e}")
-        return _extract_first_n_complete_objects(content[start:], n=5)
+        print(f"DEBUG: _extract_complete_json_array: {array_key} parse failed: {e}")
+        return None
 
 
-def _extract_first_n_complete_objects(array_content: str, n: int = 10) -> Optional[list]:
-    """
-    从数组内容中（去掉 [ ]）提取前 N 个完整的 { ... } 对象。
-    """
-    objects = []
-    ptr = 0
-    # 跳过开头的 [
-    if ptr < len(array_content) and array_content[ptr] == '[':
-        ptr += 1
-
-    for _ in range(n):
-        # 跳过 whitespace 和逗号
-        while ptr < len(array_content) and array_content[ptr] in ' \t\n\r,':
-            ptr += 1
-        if ptr >= len(array_content):
-            break
-        if array_content[ptr] != '{':
-            break  # 不是对象了
-
-        # 找这个对象的闭合 }
-        brace_count = 1
-        obj_start = ptr
-        ptr += 1
-        while ptr < len(array_content) and brace_count > 0:
-            c = array_content[ptr]
-            if c == '{':
-                brace_count += 1
-            elif c == '}':
-                brace_count -= 1
-            ptr += 1
-        if brace_count == 0:
-            obj_str = array_content[obj_start:ptr]
-            try:
-                obj = json.loads(obj_str)
-                objects.append(obj)
-            except json.JSONDecodeError as e:
-                print(f"DEBUG: _extract_first_n_complete_objects: json parse failed: {e}")
-        else:
-            print("DEBUG: _extract_first_n_complete_objects: no closing brace")
-            break
-
-    if objects:
-        print(f"INFO: _extract_first_n_complete_objects: extracted {len(objects)} complete objects")
-        return objects
-    return None
 
 
 def _parse_llm_json_response(content: str) -> Dict:
     """
-    解析 LLM 返回的 JSON 内容，带多级容错：
-    Level 1: 直接解析
-    Level 2: 标准修复后解析
-    Level 2.5: 从截断的内容中提取完整的 inscription_regions 和 painting_regions
-    Level 3: 更激进 — 用正则从损坏文本中提取 regions
-    Level 4: 返回最小有效结构，并标记失败
+    解析 LLM 返回的 JSON 内容（B10 收敛为两层）：
+    1. parse_json_loose：容忍 ```json 围栏与前后缀文本
+    2. 截断兜底：响应被 max_tokens 截断时，用括号计数提取完整的 regions 数组
+    都失败返回 success=False 的最小结构（调用方会重试或报错）。
     """
-    raw = content
-
-    # --- Level 1: 直接尝试 ---
     try:
-        parsed = json.loads(content.strip())
+        parsed = parse_json_loose(content)
         parsed["success"] = True
         return parsed
-    except (json.JSONDecodeError, ValueError):
+    except (ValueError, json.JSONDecodeError):
         pass
 
-    # --- Level 2: 跳过标准修复（容易把内容改坏），直接进 Level 2.5 提取 regions ---
-    print("WARNING: Level 1 直接解析失败，跳过 Level 2 修复，直接进 Level 2.5")
-
-    # --- Level 2.5: 提取完全截断前的完整 regions 数组 ---
-    # 专门处理这种：开头有完整 inscription_regions/painting_regions，后面截断的情况
-    print("WARNING: Level 2.5: 从原始内容中提取完整 regions...")
     try:
-        # 先移除 ```json 标记，只取第一个 { 之后的内容
-        clean_start = content
-        m = re.search(r'```json\s*({)', clean_start, re.MULTILINE | re.DOTALL)
-        if m:
-            clean_start = content[m.start(1):]
-        else:
-            start = clean_start.find('{')
-            if start != -1:
-                clean_start = clean_start[start:]
-
-        # 提取完整的 inscription_regions 数组
-        insc_extracted = _extract_complete_json_array(clean_start, "inscription_regions")
-        paint_extracted = _extract_complete_json_array(clean_start, "painting_regions")
-        print(f"INFO: Level 2.5 提取结果: inscription_regions={'有' if insc_extracted is not None else '无'}, painting_regions={'有' if paint_extracted is not None else '无'}")
-        
+        insc_extracted = _extract_complete_json_array(content, "inscription_regions")
+        paint_extracted = _extract_complete_json_array(content, "painting_regions")
         if insc_extracted is not None or paint_extracted is not None:
-            result = {
+            print("INFO: JSON截断但括号计数提取 regions 成功")
+            return {
                 "inscription_regions": insc_extracted if insc_extracted is not None else [],
                 "painting_regions": paint_extracted if paint_extracted is not None else [],
                 "blank_regions": [],
-                "analysis_note": "JSON截断但成功提取区域"
+                "analysis_note": "JSON截断但成功提取区域",
+                "success": True,
             }
-            print("INFO: Level 2.5 截断提取成功，直接返回 regions")
-            result["success"] = True
-            return result
-    except Exception as e25:
-        print(f"WARNING: Level 2.5 失败: {e25}")
+    except Exception as e_ext:
+        print(f"WARNING: regions 截断提取兜底失败: {e_ext}")
 
-    # --- Level 3: 更激进 — 用正则从损坏文本中提取 regions ---
-    print("WARNING: Level 3: 尝试正则提取关键数据...")
-    analysis = _extract_regions_from_malformed_text(content)
-    if analysis:
-        print("INFO: Level 3 正则提取成功")
-        analysis["success"] = True
-        return analysis
-
-    # --- Level 4: 返回最小有效结构，并标记失败 ---
     print("ERROR: 所有JSON解析方式均失败，返回空结构")
-    print(f"ERROR: Level 4 原始响应前500字符: {raw[:500]}")
+    print(f"ERROR: 原始响应前500字符: {content[:500]}")
     return {
         "success": False,
         "inscription_regions": [],
         "painting_regions": [],
         "blank_regions": [],
-        "analysis_note": "JSON解析失败，原始内容前200字符: " + raw[:200]
+        "analysis_note": "JSON解析失败，原始内容前200字符: " + content[:200]
     }
 
 
-def _extract_regions_from_malformed_text(text: str) -> Optional[Dict]:
-    """
-    从严重损坏的文本中用正则提取 inscription_regions 和 painting_regions
-    """
-    result = {}
-
-    # 尝试找 inscription_regions 数组内容
-    insc_match = re.search(r'"inscription_regions"\s*:\s*\[([\s\S]*?)\](?=\s*,\s*"painting|\s*,\s*"blank|\s*\})', text)
-    if not insc_match:
-        insc_match = re.search(r'["\']?inscription_regions["\']?\s*[:=]\s*\[([\s\S]*?)\](?=[,\}])', text)
-
-    paint_match = re.search(r'"painting_regions"\s*:\s*\[([\s\S]*?)\](?=\s*,\s*"blank|\s*\})', text)
-    if not paint_match:
-        paint_match = re.search(r'["\']?painting_regions["\']?\s*[:=]\s*\[([\s\S]*?)](?=[,\}])', text)
-
-    def _parse_region_array(array_text: str) -> list:
-        """从数组文本中提取多边形点"""
-        regions = []
-        objects = re.findall(r'\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}', array_text)
-        for obj_text in objects:
-            region = {}
-            pts_match = re.search(r'"points"\s*:\s*\[([^\]]*)\]', obj_text)
-            if pts_match:
-                points = []
-                for pt in re.findall(r'\{\s*"x"\s*:\s*([\d.]+)\s*,\s*"y"\s*:\s*([\d.]+)\s*\}', pts_match.group(1)):
-                    points.append({"x": float(pt[0]), "y": float(pt[1])})
-                if len(points) >= 3:
-                    region["points"] = points
-            else:
-                rect = re.search(r'"x1"\s*:\s*([\d.]+).*?"y1"\s*:\s*([\d.]+).*?"x2"\s*:\s*([\d.]+).*?"y2"\s*:\s*([\d.]+)', obj_text)
-                if rect:
-                    region["x1"] = float(rect.group(1))
-                    region["y1"] = float(rect.group(2))
-                    region["x2"] = float(rect.group(3))
-                    region["y2"] = float(rect.group(4))
-
-            if region:
-                regions.append(region)
-
-        return regions
-
-    if insc_match:
-        result["inscription_regions"] = _parse_region_array(insc_match.group(1))
-    else:
-        result["inscription_regions"] = []
-
-    if paint_match:
-        result["painting_regions"] = _parse_region_array(paint_match.group(1))
-    else:
-        result["painting_regions"] = []
-
-    result["blank_regions"] = []
-    note_match = re.search(r'"analysis_note"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
-    if note_match:
-        result["analysis_note"] = note_match.group(1).replace('\\"', '"').replace('\\n', '\n')
-    else:
-        result["analysis_note"] = ""
-
-    if result["inscription_regions"]:
-        return result
-    return None
-
-
-def _repair_json_string(content: str) -> str:
-    """
-    激进修复 LLM 返回的损坏 JSON 字符串。
-    处理常见的格式错误：缺少逗号、中文标点、截断、多余文本等。
-    """
-    import re
-
-    # Step 0: 提取最外层 {} 块
-    start = content.find("{")
-    end = content.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        content = content[start:end + 1]
-    else:
-        return "{}"
-
-    # Step 1: 移除 markdown 代码块标记
-    content = re.sub(r'^```(?:json)?\s*', '', content)
-    content = re.sub(r'\s*```\s*$', '', content)
-    content = content.strip()
-
-    # Step 2: 替换中文标点为英文
-    replacements = {
-        "\uff0c": ",",   # ，→ ,
-        "\uff1a": ":",   # ：→ :
-        "\u201c": '"',   # "
-        "\u201d": '"',   # "
-        "\u2018": "'",   # '
-        "\u2019": "'",   # '
-        "\u3001": ",",   # 、→ ,
-        "\uff08": "(",   # （→ (
-        "\uff09": ")",   # ）→ )
-        "\uff1b": ";",   # ；→ ;
-    }
-    for old, new in replacements.items():
-        content = content.replace(old, new)
-
-    # Step 3: 移除单行注释 // ...
-    content = re.sub(r'//[^\n]*', '', content)
-
-    # Step 4: 处理字符串内的换行（将多行字符串合并）
-    # 先保护字符串内容，修复内部换行
-    def _fix_newlines_in_strings(s):
-        result = []
-        in_string = False
-        string_char = None
-        i = 0
-        while i < len(s):
-            c = s[i]
-            if in_string:
-                if c == '\\' and i + 1 < len(s):
-                    result.append(c)
-                    result.append(s[i + 1])
-                    i += 2
-                    continue
-                elif c == string_char:
-                    in_string = False
-                    result.append(c)
-                    i += 1
-                    continue
-                elif c == '\n' or c == '\r':
-                    result.append(' ')  # 换行替换为空格
-                    i += 1
-                    continue
-                else:
-                    result.append(c)
-                    i += 1
-                    continue
-            else:
-                if c == '"' or c == "'":
-                    in_string = True
-                    string_char = c
-                    result.append(c)
-                elif c == '\\':
-                    result.append(c)
-                    if i + 1 < len(s):
-                        result.append(s[i + 1])
-                        i += 2
-                        continue
-                else:
-                    result.append(c)
-                i += 1
-        return ''.join(result)
-
-    content = _fix_newlines_in_strings(content)
-
-    # Step 5: 移除尾部逗号 }, ] 前面
-    content = re.sub(r",\s*([}\]])", r"\1", content)
-
-    # Step 6: 修复常见结构问题
-
-    # } 后紧跟 { 或 [ → 补逗号
-    content = re.sub(r'\}\s*(?=[{\[])', '},', content)
-
-    # ] 后紧跟 { → 补逗号
-    content = re.sub(r'\]\s*\{', '],[{', content)
-
-    # 数字/布尔/null/} 后直接跟 "（新键名）或数字 → 补逗号
-    # 注意：只在对象上下文中处理
-    content = re.sub(r'(true|false|null|\d\.?\d*)\s*"', r'\1,"', content)
-
-    # Step 7: 修复未闭合的字符串（截断情况）
-    # 找到所有双引号，如果奇数个，补一个
-    quote_count = content.count('"') - content.count('\\"')
-    if quote_count % 2 == 1:
-        # 在最后一个非 }/] 的位置前补引号
-        last_brace = max(content.rfind('}'), content.rfind(']'))
-        if last_brace > 0:
-            insert_pos = last_brace
-            # 往回找合适的插入点
-            while insert_pos > 0 and content[insert_pos - 1] in ' \t\n\r,':
-                insert_pos -= 1
-            content = content[:insert_pos] + '"' + content[insert_pos:]
-
-    # Step 8: 处理截断 — 如果最后一个字符不是 } 或 ]
-    content = content.rstrip()
-    if content and content[-1] not in ('}', ']'):
-        # 尝试闭合
-        open_braces = content.count('{') - content.count('}')
-        open_brackets = content.count('[') - content.count(']')
-        content += '}' * max(0, open_braces) + ']' * max(0, open_brackets)
-        # 再次清理尾部逗号
-        content = re.sub(r",\s*([}\]])", r"\1", content)
-
-    # Step 9: 最终清理多余空白
-    content = re.sub(r'\n+', ' ', content)
-    content = re.sub(r'[ \t]+', ' ', content)
-
-    return content
 
 
 def analyze_image_regions(image_path: str, image_width: int, image_height: int, artist: str = None) -> Dict:
@@ -517,7 +247,9 @@ def analyze_image_regions(image_path: str, image_width: int, image_height: int, 
                 }
             ],
             "stream": False,
-            "max_tokens": 16384
+            "max_tokens": 16384,
+            # 要求供应商返回合法 JSON（实测 zhipu/dashscope 兼容模式均支持）
+            "response_format": {"type": "json_object"}
         }
 
         print("INFO: 开始调用API分析图像...")
@@ -591,6 +323,10 @@ def analyze_image_regions(image_path: str, image_width: int, image_height: int, 
                         }
                     except httpx.HTTPStatusError as e:
                         status = e.response.status_code
+                        # 个别供应商/模型不支持 response_format：去掉后在本供应商内重试
+                        if status == 400 and provider_payload.pop("response_format", None) is not None:
+                            print("WARNING: 供应商拒绝 response_format，去掉后重试")
+                            continue
                         retryable = status in (429, 500, 502, 503, 504)
                         if retryable and retry < MAX_RETRIES - 1:
                             print(f"WARNING: API请求错误 {status} (重试 {retry+1}/{MAX_RETRIES})")

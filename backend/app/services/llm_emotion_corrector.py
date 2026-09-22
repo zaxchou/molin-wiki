@@ -20,10 +20,10 @@ LLM 逐维度情感校正服务
   }
 """
 
-import json
 import time
 import logging
 from typing import Dict, List, Optional, Any
+from app.llm import parse_json_loose
 from app.services.qwen_llm_client import call_qwen_chat_async
 
 logger = logging.getLogger(__name__)
@@ -77,33 +77,11 @@ def _build_user_prompt(
 
 
 def _extract_json(text: str) -> Optional[dict]:
-    """从 LLM 回复中提取 JSON 对象（处理 markdown 代码块包裹）"""
-    text = text.strip()
-
-    # 尝试直接解析
+    """从 LLM 回复中提取 JSON 对象（统一走网关 parse_json_loose，容忍围栏与前后缀文本）"""
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # 尝试从 ```json ... ``` 中提取
-    import re
-    m = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    # 尝试从 { 开始 } 结束提取
-    m = re.search(r'(\{.*\})', text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    return None
+        return parse_json_loose(text)
+    except ValueError:
+        return None
 
 
 def _validate_corrections(data: dict) -> bool:

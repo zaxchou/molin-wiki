@@ -27,4 +27,7 @@ def parse_json_loose(text: str):
         start = text.find("[")
     if start == -1:
         raise json.JSONDecodeError("no JSON found", text, 0)
-    return json.loads(text[start:])
+    end = max(text.rfind("}"), text.rfind("]"))
+    if end < start:
+        raise json.JSONDecodeError("unterminated JSON", text, start)
+    return json.loads(text[start:end + 1])
