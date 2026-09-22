@@ -23,11 +23,22 @@ result = parse_json_loose(data["choices"][0]["message"]["content"])
 
 | 能力 | 说明 |
 |---|---|
-| 供应商解析 | providers.py 配置驱动：auto=deepseek→qwen→zhipu；body_defaults 处理各家思考模式差异 |
+| 供应商解析 | providers.py 配置驱动：调用方显式指定 > site_settings 运行时覆盖（管理后台「AI 接口」开关，键 llm_default_provider / llm_default_model，TTL 缓存 5s）> auto（custom→deepseek→qwen→zhipu，按密钥可用性）；body_defaults 处理各家思考模式差异 |
 | 连接复用 | 模块级 httpx 客户端单例（旧实现每次调用新建连接） |
 | 重试 | 429/5xx/网络错误指数退避 + 抖动，默认 2 次重试 |
-| 计量 | usage.py：每次调用记录 provider/model/延迟/tokens/成败（结构化日志 + 进程内计数器） |
+| 计量 | usage.py：每次调用记录 provider/model/延迟/tokens/成败（结构化日志 + 进程内计数器），管理后台可见 |
 | JSON 修复 | parse_json_loose |
+
+## 接入新供应商（MiMo / DeepSeek / Kimi / GLM…）
+
+OpenAI 兼容的新模型无需改代码：
+
+1. 服务器 env 设置 `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`
+2. 管理后台 → 系统设置 → AI 接口，选择「自定义 OpenAI 兼容」并保存
+
+切换 ≤5 秒全站生效，管辖范围是走网关的文本类 LLM（翻译、题跋解读、知识问答、情感校正等）；
+视觉专用链路（题跋 VL 分类、构图讲评、书法识别）与 embedding 有各自配置，不受此开关影响
+（embedding 换模型会导致向量空间不一致，永远不要跟着切）。
 
 ## 存量服务迁移路线（分批进行）
 

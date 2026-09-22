@@ -146,6 +146,12 @@ class Settings(BaseSettings):
     ZHIPU_MODEL: str = Field(default="glm-5v-turbo")
     ZHIPU_ENABLED: bool = Field(default=False)
 
+    # 通用 OpenAI 兼容供应商——接任何新模型（MiMo/DeepSeek/Kimi/GLM…）改这三个即可，
+    # 配合管理后台「AI 接口」开关把默认供应商切到 custom，无需改代码
+    AI_BASE_URL: str = Field(default="")
+    AI_API_KEY: str = Field(default="")
+    AI_MODEL: str = Field(default="")
+
     TIBA_LLM_PROVIDER: str = os.getenv("TIBA_LLM_PROVIDER", "").strip().lower()
 
     # DashScope 多模态 Embedding 开关（图像向量化用 multimodal-embedding-v1）

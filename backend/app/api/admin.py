@@ -381,6 +381,92 @@ def my_permissions(perms: dict = Depends(get_user_permissions)):
     return perms
 
 
+# ── AI 接口切换（默认 LLM 供应商运行时开关）──
+
+import time as _time
+
+_AI_PROVIDERS = ("auto", "custom", "deepseek", "qwen", "siliconflow", "zhipu")
+
+
+class AIProviderUpdate(BaseModel):
+    provider: str  # auto / custom / deepseek / qwen / siliconflow / zhipu
+    model: str = ""  # 留空用各供应商默认模型
+
+
+@router.get("/ai-provider")
+def get_ai_provider(
+    admin: User = Depends(require_admin_role),
+):
+    """当前默认 AI 供应商、各密钥配置状态与进程内调用计量。"""
+    from app.llm.providers import read_runtime_defaults
+    from app.llm.usage import snapshot
+
+    s = get_settings()
+    provider, model = read_runtime_defaults()
+    return {
+        "provider": provider or "auto",
+        "model": model,
+        "keys_present": {
+            "custom": bool(s.AI_API_KEY and s.AI_BASE_URL),
+            "deepseek": bool(s.DEEPSEEK_API_KEY),
+            "qwen": bool(s.QWEN_API_KEY),
+            "siliconflow": bool(s.SILICONFLOW_API_KEY),
+            "zhipu": bool(s.ZHIPU_ENABLED and s.ZHIPU_API_KEY),
+        },
+        "custom_base_url": s.AI_BASE_URL,
+        "usage": snapshot(),
+    }
+
+
+@router.put("/ai-provider")
+def update_ai_provider(
+    body: AIProviderUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_super_admin),
+):
+    """切换默认 AI 供应商（写 site_settings，立即生效，无需重启）。"""
+    p = body.provider.strip().lower()
+    if p not in _AI_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"未知供应商: {body.provider}")
+    model = body.model.strip()
+    db.execute(
+        text("INSERT INTO site_settings (key, value, updated_at) VALUES (:k, :v, CURRENT_TIMESTAMP) "
+             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"),
+        [{"k": "llm_default_provider", "v": p}, {"k": "llm_default_model", "v": model}],
+    )
+    db.commit()
+    from app.llm.providers import invalidate_runtime_default
+    invalidate_runtime_default()
+    logger.info("管理员 %d 切换默认 AI 供应商: %s (model=%s)", admin.id, p, model or "(默认)")
+    return {"ok": True, "provider": p, "model": model}
+
+
+@router.post("/ai-provider/test")
+def test_ai_provider(
+    body: Optional[AIProviderUpdate] = None,
+    admin: User = Depends(require_admin_role),
+):
+    """用指定（或当前生效）配置真实调用一次，返回延迟与回复。"""
+    from app.llm.client import chat_completion
+    from app.llm.errors import LLMError
+
+    body = body or AIProviderUpdate(provider="", model="")
+    started = _time.monotonic()
+    try:
+        resp = chat_completion(
+            [{"role": "user", "content": "请只回复两个字母:OK"}],
+            provider=body.provider.strip().lower() or None,
+            model=body.model.strip() or None,
+            max_tokens=32, temperature=0, retries=0, timeout=45,
+        )
+        reply = resp["choices"][0]["message"]["content"]
+        return {"ok": True, "latency": round(_time.monotonic() - started, 2),
+                "model": resp.get("model", ""), "reply": (reply or "").strip()[:120]}
+    except Exception as e:
+        return {"ok": False, "latency": round(_time.monotonic() - started, 2),
+                "error": str(e)[:200]}
+
+
 # ── 站点设置 ──
 
 class SiteSettingsUpdate(BaseModel):

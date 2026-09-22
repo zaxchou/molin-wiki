@@ -5,6 +5,68 @@
       <p class="ss-desc">修改后即时生效，无需重新部署。游客看到的标题、副标题、页脚等都会同步更新。</p>
     </div>
 
+    <!-- AI 接口切换卡片 -->
+    <div class="ss-card" v-loading="aiLoading">
+      <div class="ss-section" style="margin-bottom: 0;">
+        <h3 class="ss-section-title">AI 接口</h3>
+        <p class="ss-ai-desc">默认文本 AI 供应商，保存后立即生效（约 5 秒内全站切换），无需重新部署。题跋识别、构图讲评等视觉专用链路不受此开关影响。</p>
+        <div class="ss-ai-row">
+          <div class="ss-field" style="flex: 1;">
+            <label class="ss-label">默认供应商</label>
+            <select class="ss-input" v-model="ai.provider">
+              <option value="auto">自动（按可用密钥）</option>
+              <option value="custom" :disabled="!aiKeys.custom">自定义 OpenAI 兼容（需配 AI_BASE_URL）</option>
+              <option value="deepseek" :disabled="!aiKeys.deepseek">DeepSeek</option>
+              <option value="qwen" :disabled="!aiKeys.qwen">通义千问 Qwen</option>
+              <option value="siliconflow" :disabled="!aiKeys.siliconflow">硅基流动 SiliconFlow</option>
+              <option value="zhipu" :disabled="!aiKeys.zhipu">智谱 GLM</option>
+            </select>
+            <span class="ss-hint">「自动」= custom → DeepSeek → Qwen → 智谱，按服务器已配置的密钥顺序取用</span>
+          </div>
+          <div class="ss-field" style="flex: 1;">
+            <label class="ss-label">模型覆盖（可选）</label>
+            <input class="ss-input" v-model="ai.model" placeholder="留空用该供应商默认模型"
+                   @input="aiDirty = true" />
+            <span class="ss-hint">如 deepseek-chat / qwen3.5-plus /glm-5v-turbo；仅对此开关管辖的文本 AI 生效</span>
+          </div>
+        </div>
+        <div class="ss-ai-keys">
+          <span v-for="(ok, name) in aiKeys" :key="name" class="ss-ai-key" :class="{ on: ok }">
+            {{ aiProviderNames[name] || name }} {{ ok ? '已配置' : '未配置' }}
+          </span>
+        </div>
+        <div class="ss-actions" style="margin-top: 16px; padding-top: 16px;">
+          <button class="ss-btn-save" :disabled="aiSaving" @click="saveAI">
+            <el-icon v-if="aiSaving" class="is-loading"><Loading /></el-icon>
+            {{ aiSaving ? '保存中...' : '保存切换' }}
+          </button>
+          <button class="ss-btn-reset" :disabled="aiTesting" @click="testAI">
+            {{ aiTesting ? '测试中...' : '测试连通' }}
+          </button>
+          <span v-if="aiMsg" class="ss-msg" :class="{ error: aiMsgErr }">{{ aiMsg }}</span>
+        </div>
+        <div v-if="aiTestResult" class="ss-ai-test" :class="{ fail: !aiTestResult.ok }">
+          <template v-if="aiTestResult.ok">
+            ✓ {{ aiTestResult.model || '未知模型' }} · {{ aiTestResult.latency }}s · 回复「{{ aiTestResult.reply }}」
+          </template>
+          <template v-else>✗ {{ aiTestResult.error }}（{{ aiTestResult.latency }}s）</template>
+        </div>
+        <div v-if="Object.keys(aiUsage).length" class="ss-ai-usage">
+          <div class="ss-ai-usage-title">进程内调用计量（重启清零）</div>
+          <table class="ss-ai-usage-table">
+            <thead><tr><th>供应商:模型</th><th>调用</th><th>失败</th><th>tokens</th><th>均延迟</th></tr></thead>
+            <tbody>
+              <tr v-for="(st, key) in aiUsage" :key="key">
+                <td>{{ key }}</td><td>{{ st.calls }}</td><td>{{ st.failures }}</td>
+                <td>{{ st.tokens || '—' }}</td>
+                <td>{{ st.calls ? (st.latency_sum / st.calls).toFixed(2) + 's' : '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <div class="ss-card" v-loading="loading">
       <!-- 错误提示 -->
       <div v-if="loadError" class="ss-alert ss-alert-error">
@@ -109,12 +171,84 @@ const form = reactive({
   title: '', subtitle: '', full_title: '', domain: '', footer: '', author: '',
 })
 
+// ── AI 接口切换 ──
+const aiLoading = ref(false)
+const aiSaving = ref(false)
+const aiTesting = ref(false)
+const aiMsg = ref('')
+const aiMsgErr = ref(false)
+const aiDirty = ref(false)
+const aiKeys = ref({})
+const aiUsage = ref({})
+const aiTestResult = ref(null)
+const ai = reactive({ provider: 'auto', model: '' })
+const aiProviderNames = {
+  auto: '自动', custom: '自定义', deepseek: 'DeepSeek',
+  qwen: 'Qwen', siliconflow: 'SiliconFlow', zhipu: '智谱 GLM',
+}
+
+async function loadAI() {
+  aiLoading.value = true
+  try {
+    const d = await api.get('/admin/ai-provider')
+    ai.provider = d.provider || 'auto'
+    ai.model = d.model || ''
+    aiKeys.value = d.keys_present || {}
+    aiUsage.value = d.usage || {}
+    aiDirty.value = false
+    aiMsg.value = ''
+  } catch (e) {
+    // 权限不足等场景静默：品牌设置区的 loadError 已有提示
+    console.error('加载 AI 接口配置失败', e)
+  } finally {
+    aiLoading.value = false
+  }
+}
+
+async function saveAI() {
+  aiSaving.value = true
+  aiMsg.value = ''
+  try {
+    const d = await api.put('/admin/ai-provider', {
+      provider: ai.provider,
+      model: ai.model.trim(),
+    })
+    aiMsg.value = `已切换到「${aiProviderNames[d.provider] || d.provider}」，约 5 秒内全站生效`
+    aiMsgErr.value = false
+    aiDirty.value = false
+    loadAI()
+  } catch (e) {
+    const data = e.response?.data
+    aiMsg.value = data?.detail || `HTTP ${e.response?.status || ''}`
+    aiMsgErr.value = true
+  } finally {
+    aiSaving.value = false
+  }
+}
+
+async function testAI() {
+  aiTesting.value = true
+  aiTestResult.value = null
+  try {
+    const d = await api.post('/admin/ai-provider/test', {
+      provider: ai.provider === 'auto' ? '' : ai.provider,
+      model: ai.model.trim(),
+    })
+    aiTestResult.value = { ...d, provider: d.model ? (d.provider || ai.provider) : ai.provider }
+  } catch (e) {
+    aiTestResult.value = { ok: false, error: e.response?.data?.detail || e.message, latency: 0 }
+  } finally {
+    aiTesting.value = false
+  }
+}
+
 function onFieldChange() {
   dirty.value = true
 }
 
 onMounted(async () => {
   await load()
+  loadAI()
 })
 
 async function load() {
@@ -307,6 +441,77 @@ async function save() {
 .ss-hint {
   font-size: 11px;
   color: #b0a890;
+}
+
+/* ── AI 接口切换 ── */
+.ss-ai-desc {
+  font-size: 12px;
+  color: #8c7a5c;
+  line-height: 1.6;
+  margin: -6px 0 14px;
+}
+.ss-ai-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.ss-ai-keys {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.ss-ai-key {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  border: 1px solid #e0dbc8;
+  background: #faf9f5;
+  color: #b0a890;
+}
+.ss-ai-key.on {
+  border-color: #cfe3c2;
+  background: #f3f9ee;
+  color: #4a7a35;
+}
+.ss-ai-test {
+  margin-top: 12px;
+  font-size: 12.5px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  background: #f3f9ee;
+  border: 1px solid #cfe3c2;
+  color: #4a7a35;
+}
+.ss-ai-test.fail {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+  word-break: break-all;
+}
+.ss-ai-usage {
+  margin-top: 16px;
+}
+.ss-ai-usage-title {
+  font-size: 11px;
+  color: #b0a890;
+  margin-bottom: 6px;
+}
+.ss-ai-usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ss-ai-usage-table th, .ss-ai-usage-table td {
+  text-align: left;
+  padding: 5px 10px;
+  border-bottom: 1px solid #f0ebe0;
+  color: #5c5346;
+}
+.ss-ai-usage-table th {
+  color: #b0a890;
+  font-weight: 500;
+  font-size: 11px;
 }
 
 /* 操作栏 */
