@@ -45,10 +45,10 @@ OpenAI 兼容的新模型无需改代码：
 | 批次 | 文件 | 状态 |
 |---|---|---|
 | 1（样板） | `services/qwen_llm_client.py` → 网关薄封装 | ✅ 已完成 |
-| 2 | `services/deepseek_service.py`（requests 同步 → 网关） | 待做 |
+| 2 | `services/deepseek_service.py` | ✅ 2026-09-22 零引用已删除（B4） |
 | 3 | `services/siliconflow_service.py` / `siliconflow_recognition_service.py` | 待做 |
-| 4 | `services/inscription_*` 系列（8 个，各自拼 prompt+调 LLM） | 待做 |
-| 5 | `services/baidu_ocr_service.py`、`baidu_crawler.py`（消灭剩余同步 requests） | 待做 |
-| 6 | emotion_lexicon v1/v2 并存收敛（v3 为主） | 待做 |
+| 4 | `services/inscription_*` 系列（各自拼 prompt+调 LLM） | 待做（inscription_summary_generator 已随 B4 删除） |
+| 5 | `services/baidu_ocr_service.py`（零引用） | ✅ 2026-09-22 已删除（B4） |
+| 6 | emotion_lexicon v1/v2 并存收敛（v3 为主） | 进行中（v2 已删，写路径已收口 v3） |
 
 迁移规则：旧模块改为网关薄封装（保留旧函数签名，内部调 app.llm）；禁止在服务层直接 new httpx/requests。

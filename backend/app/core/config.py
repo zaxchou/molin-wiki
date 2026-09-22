@@ -45,9 +45,6 @@ class Settings(BaseSettings):
     TIBA_REFINE_INSCRIPTION_MASK: bool = Field(default=False)
     TIBA_DEBUG_SAVE_IMAGES: bool = Field(default=False)
     TIBA_IMAGE_ID: str = Field(default="")
-    
-    # CV-First 新流程开关
-    USE_CV_FIRST_PIPELINE: bool = Field(default=False)
 
     # 站点只读模式（true 时隐藏登录/注册/互动功能）
     SITE_READONLY: bool = Field(default=False)
