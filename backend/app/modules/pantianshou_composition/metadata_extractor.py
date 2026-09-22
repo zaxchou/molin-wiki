@@ -111,26 +111,14 @@ def _extract_json(text: str) -> dict:
 
 
 async def _call_llm(content: str, timeout: int = 60) -> dict:
-    """调用 DeepSeek LLM 提取元数据，返回解析后的 dict"""
-    import httpx
-    from app.core.config import get_settings
-    settings = get_settings()
+    """调用默认文本 LLM（跟随管理后台「AI 接口」开关）提取元数据，返回解析后的 dict"""
+    from app.llm.client import chat_completion_async
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.post(
-            f"{settings.DEEPSEEK_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}"},
-            json={
-                "model": settings.DEEPSEEK_TEXT_MODEL,
-                "messages": [
-                    {"role": "user", "content": EXTRACTION_PROMPT.format(content=content)}
-                ],
-                "temperature": 0.1,
-                "max_tokens": 800,
-            },
-        )
-        resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"]
+    resp = await chat_completion_async(
+        [{"role": "user", "content": EXTRACTION_PROMPT.format(content=content)}],
+        max_tokens=800, temperature=0.1, timeout=timeout,
+    )
+    text = resp["choices"][0]["message"]["content"]
 
     result = _extract_json(text)
     if not result:

@@ -16,14 +16,16 @@
 
 ## P1 遗留迁移 + 死代码清理
 
-- [ ] **B4 死文件清理(低风险)**:deepseek_service.py、baidu_ocr_service.py、qwen_vl_ocr_router.py、
+- [x] **B4 死文件清理(低风险)**:deepseek_service.py、baidu_ocr_service.py、qwen_vl_ocr_router.py、
   inscription_summary_generator.py、emotion_lexicon_v2.json、app/tiba 孤儿管线
   (llm_classifier/vl_verifier/cv_mask_extractor/evaluation/learning_loop——线上实际走
   siliconflow_service 单次 VL)、USE_CV_FIRST_PIPELINE 死开关、前端 3 个孤儿 view
   (MyStats/Home/TibaRanking)、start_backend.py(8003 端口过时脚本)。
-- [ ] **B5 metadata_extractor 迁网关**:硬编码 DEEPSEEK 直连,纯文本,一处改动。
-- [ ] **B6 tiba_worker 迁网关**:直连 siliconflow + fallback 硬编码 Qwen2.5-VL-32B 旧模型;
-  修 generate_heatmap_data 未导入 Dict 的 NameError 死代码。
+- [x] **B5 metadata_extractor 迁网关**:硬编码 DEEPSEEK 直连 → chat_completion_async(跟随 AI 开关)。
+- [x] **B6 tiba_worker 迁网关**:修复 tubi→tiba 模型改名后 4 个月的断链导入(被 try/except 吞掉);
+  删除 generate_heatmap_data 死代码(未导入 Dict 的 NameError);
+  VL 调用从硬编码 siliconflow Qwen2.5-VL-32B → 网关 provider=qwen(视觉通道不随默认开关);
+  新增 tests/test_worker_imports.py 导入级回归。
 - [ ] **B7 artists.py**:async 路由内同步 requests 抓百度百科阻塞事件循环 → httpx.AsyncClient。
 
 ## P2 依赖与 CI 健康
@@ -68,4 +70,6 @@
 | B2 词典写入路径 | ✅ 2026-09-22 | 9d6b118 |
 | B3 下架 fast_reindex | ✅ 2026-09-22 | 9d6b118 |
 | B4 死代码清理(-11872 行) | ✅ 2026-09-22 | 1ebe019 |
-| B5~B16 | 待做 | — |
+| B5 metadata_extractor 迁网关 | ✅ 2026-09-22 | 本批 |
+| B6 tiba_worker 修断链+迁网关 | ✅ 2026-09-22 | 本批 |
+| B7~B16 | 待做 | — |

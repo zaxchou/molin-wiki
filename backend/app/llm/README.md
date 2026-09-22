@@ -50,5 +50,7 @@ OpenAI 兼容的新模型无需改代码：
 | 4 | `services/inscription_*` 系列（各自拼 prompt+调 LLM） | 待做（inscription_summary_generator 已随 B4 删除） |
 | 5 | `services/baidu_ocr_service.py`（零引用） | ✅ 2026-09-22 已删除（B4） |
 | 6 | emotion_lexicon v1/v2 并存收敛（v3 为主） | 进行中（v2 已删，写路径已收口 v3） |
+| 7 | `modules/pantianshou_composition/metadata_extractor.py` | ✅ 2026-09-22 迁网关默认文本通道（B5） |
+| 8 | `tiba_worker.py`（VL 识图，image_url 首个网关调用方） | ✅ 2026-09-22 迁网关 provider=qwen 固定视觉通道（B6） |
 
 迁移规则：旧模块改为网关薄封装（保留旧函数签名，内部调 app.llm）；禁止在服务层直接 new httpx/requests。

@@ -10,35 +10,9 @@ import numpy as np
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.path_utils import normalize_path
-from app.models.tubi_analysis import TubiAnalysis
-from app.models.tubi_job import TubiJob
-
-
-def generate_heatmap_data(regions: Dict, width: int, height: int) -> list:
-    """将区域数据转换为热力图数据格式"""
-    heatmap = []
-    region_map = {
-        'painting': regions.get('painting_regions', []),
-        'inscription': regions.get('inscription_regions', []),
-    }
-    for rtype, region_list in region_map.items():
-        if not isinstance(region_list, list):
-            continue
-        for idx, region in enumerate(region_list):
-            if not isinstance(region, dict):
-                continue
-            bbox = region.get('bbox', [])
-            if len(bbox) == 4:
-                heatmap.append({
-                    'type': rtype,
-                    'x': float(bbox[0]) / width,
-                    'y': float(bbox[1]) / height,
-                    'w': float(bbox[2] - bbox[0]) / width,
-                    'h': float(bbox[3] - bbox[1]) / height,
-                    'density': region.get('confidence', 0.5),
-                })
-    return heatmap
-
+from app.llm.client import chat_completion
+from app.models.tiba_analysis import TibaAnalysis
+from app.models.tiba_job import TibaJob
 
 settings = get_settings()
 
@@ -72,9 +46,9 @@ def cleanup_stale_jobs():
     db = SessionLocal()
     try:
         threshold = datetime.now() - timedelta(minutes=30)
-        stale = db.query(TubiAnalysis).filter(
-            TubiAnalysis.status == "analyzing",
-            TubiAnalysis.updated_at < threshold
+        stale = db.query(TibaAnalysis).filter(
+            TibaAnalysis.status == "analyzing",
+            TibaAnalysis.updated_at < threshold
         ).all()
         if stale:
             for a in stale:
@@ -83,10 +57,10 @@ def cleanup_stale_jobs():
             db.commit()
 
         jobs = (
-            db.query(TubiJob)
-            .filter(TubiJob.status == "processing")
-            .filter(TubiJob.updated_at.isnot(None))
-            .filter(TubiJob.updated_at < threshold)
+            db.query(TibaJob)
+            .filter(TibaJob.status == "processing")
+            .filter(TibaJob.updated_at.isnot(None))
+            .filter(TibaJob.updated_at < threshold)
             .all()
         )
         if jobs:
@@ -101,23 +75,22 @@ def cleanup_stale_jobs():
 # ===== 核心：AI 识图（只做画材+画面描述）=====
 def process_one(conn, image_id: str):
     """调用 VL 模型，返回画材 + 画面结构描述，写入 analysis_note"""
-    import httpx
     from app.services.siliconflow_service import encode_image_to_base64
 
     db = SessionLocal()
     db_analysis = None
     db_job = None
     try:
-        db_analysis = db.query(TubiAnalysis).filter(TubiAnalysis.image_id == image_id).first()
+        db_analysis = db.query(TibaAnalysis).filter(TibaAnalysis.image_id == image_id).first()
         if not db_analysis:
             return
 
-        db_job = db.query(TubiJob).filter(TubiJob.image_id == image_id).first()
+        db_job = db.query(TibaJob).filter(TibaJob.image_id == image_id).first()
         if db_job:
             db_job.status = "processing"
             db_job.last_error = None
         else:
-            db_job = TubiJob(image_id=image_id, status="processing")
+            db_job = TibaJob(image_id=image_id, status="processing")
             db.add(db_job)
         db.commit()
 
@@ -151,33 +124,24 @@ def process_one(conn, image_id: str):
             "限制在100字以内，只返回描述文本，不要JSON格式。"
         )
 
+        # 视觉通道固定走 qwen（不跟随管理后台默认文本 AI 开关）
         result_text = ""
-        for attempt in range(2):
-            try:
-                resp = httpx.post(
-                    "https://api.siliconflow.cn/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {settings.SILICONFLOW_API_KEY}"},
-                    json={
-                        "model": getattr(settings, "SILICONFLOW_MODEL", None) or "Qwen/Qwen2.5-VL-32B-Instruct",
-                        "messages": [{"role": "user", "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                            {"type": "text", "text": prompt}
-                        ]}],
-                        "max_tokens": 300,
-                        "temperature": 0.3,
-                    },
-                    timeout=60.0
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    result_text = data["choices"][0]["message"]["content"].strip()
-                    break
-                else:
-                    print(f"[tubi_worker] VL {attempt+1} HTTP {resp.status_code}")
-                    time.sleep(2)
-            except Exception as e:
-                print(f"[tubi_worker] VL {attempt+1} error: {e}")
-                time.sleep(2)
+        try:
+            data = chat_completion(
+                messages=[{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                    {"type": "text", "text": prompt}
+                ]}],
+                provider="qwen",
+                model=settings.QWEN_MODEL,
+                max_tokens=300,
+                temperature=0.3,
+                timeout=60.0,
+                retries=1,
+            )
+            result_text = data["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[tiba_worker] VL error: {e}")
 
         if not result_text:
             db_analysis.status = "error"
@@ -270,7 +234,7 @@ def run():
             db = SessionLocal()
             job = None
             try:
-                job = db.query(TubiJob).filter(TubiJob.status == "queued").order_by(TubiJob.created_at.asc()).first()
+                job = db.query(TibaJob).filter(TibaJob.status == "queued").order_by(TibaJob.created_at.asc()).first()
                 if not job:
                     time.sleep(1)
                     continue
@@ -284,7 +248,7 @@ def run():
 
             db = SessionLocal()
             try:
-                job = db.query(TubiJob).filter(TubiJob.image_id == image_id).first()
+                job = db.query(TibaJob).filter(TibaJob.image_id == image_id).first()
                 if job and job.status != "done" and job.status != "error":
                     job.status = "done"
                     db.commit()
