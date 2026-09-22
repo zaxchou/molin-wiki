@@ -485,7 +485,7 @@
       </template>
     </el-dialog>
 
-    <TibaEditDialog ref="editDialogRef" @saved="loadArtworks" />
+    <TibaEditDialog ref="editDialogRef" @saved="loadArtworks" @deleted="loadArtworks" @replaced="loadArtworks" />
   </div>
 </template>
 

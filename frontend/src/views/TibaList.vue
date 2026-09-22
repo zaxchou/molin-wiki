@@ -225,6 +225,7 @@
       ref="editDialogRef"
       @saved="onEditSaved"
       @deleted="onEditDeleted"
+      @replaced="onEditSaved"
     />
 
     <!-- 我的意见对话框 -->

@@ -59,6 +59,7 @@
       @navigate-album="navigateToAlbumItem"
       @open-annotator="openAnnotator"
       @filter-by-tag="filterByTag"
+      @history-item-click="navigateToImage"
     />
 
     <TibaEditDialog ref="editDialogRef" @saved="onEditSaved" @deleted="onEditDeleted" @replaced="onEditReplaced" />
