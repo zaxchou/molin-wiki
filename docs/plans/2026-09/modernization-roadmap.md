@@ -26,7 +26,10 @@
   删除 generate_heatmap_data 死代码(未导入 Dict 的 NameError);
   VL 调用从硬编码 siliconflow Qwen2.5-VL-32B → 网关 provider=qwen(视觉通道不随默认开关);
   新增 tests/test_worker_imports.py 导入级回归。
-- [ ] **B7 artists.py**:async 路由内同步 requests 抓百度百科阻塞事件循环 → httpx.AsyncClient。
+- [x] **B7 artists/artist_rules 异步化**:async 路由内 3 处同步 call_qwen_chat(LLM 最长阻塞数十秒)
+  + 同步 requests 抓百度百科 → call_qwen_chat_async / httpx.AsyncClient;
+  同步 baidu_crawler 走 run_in_threadpool(重写爬虫不在本批范围);
+  新增 tests/test_artists_async.py 源码级回归(禁 requests.、禁同步 call_qwen_chat( 子串)。
 
 ## P2 依赖与 CI 健康
 

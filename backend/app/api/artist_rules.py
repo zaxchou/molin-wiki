@@ -257,7 +257,7 @@ async def ai_discover_rules(artist_name: str):
         sample_texts = [row["inscription_content"][:300] for row in samples]
         combined_samples = "\n---\n".join(sample_texts[:15])
 
-        from app.services.qwen_llm_client import call_qwen_chat
+        from app.services.qwen_llm_client import call_qwen_chat_async
         from app.services.tibi_analysis_rules import THEMES
 
         theme_names = "\n".join(
@@ -289,7 +289,7 @@ async def ai_discover_rules(artist_name: str):
 
 只返回JSON，不要其他文字。life_stages 请根据该画家的实际生平填写年份。{birth_year_hint}"""
 
-        response = call_qwen_chat(
+        response = await call_qwen_chat_async(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=1500,

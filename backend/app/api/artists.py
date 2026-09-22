@@ -15,6 +15,9 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import func as sa_func, or_
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
+
+import httpx
 
 from app.core.database import get_db_connection, get_db
 from app.core.auth import require_admin_role, require_editor, require_permission, get_current_user
@@ -760,9 +763,9 @@ async def generate_travel_notes(name: str, editor=Depends(require_editor)):
         import logging
         _logger = logging.getLogger(__name__)
         try:
-            from app.services.qwen_llm_client import call_qwen_chat
+            from app.services.qwen_llm_client import call_qwen_chat_async
             _logger.info(f"Travel notes AI: calling LLM for {name}, prompt ~{len(prompt)} chars")
-            response = call_qwen_chat(
+            response = await call_qwen_chat_async(
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
                 max_tokens=8000,
@@ -848,12 +851,12 @@ async def ai_fill_artist(artist_id: int, editor=Depends(require_editor)):
         artist_name = artist["name"]
         updates = {}
 
-        baike_data = _fetch_baike_data(artist_name)
+        baike_data = await _fetch_baike_data(artist_name)
 
         if baike_data:
             updates = _merge_baike_updates(artist, baike_data)
 
-        ai_data = _ai_generate_fields(artist_name, artist, baike_data)
+        ai_data = await _ai_generate_fields(artist_name, artist, baike_data)
         if ai_data:
             json_array_cols = {"art_chronology", "anecdotes", "character_relations",
                                "published_works", "references", "gallery_images",
@@ -919,23 +922,25 @@ async def ai_fill_artist(artist_id: int, editor=Depends(require_editor)):
         conn.close()
 
 
-def _fetch_baike_data(artist_name: str) -> dict:
+async def _fetch_baike_data(artist_name: str) -> dict:
     try:
+        # baidu_crawler 是同步 requests 实现，丢线程池避免阻塞事件循环
         from app.services.baidu_crawler import fetch_artist_from_baike
-        result = fetch_artist_from_baike(artist_name)
+        result = await run_in_threadpool(fetch_artist_from_baike, artist_name)
         if result.get("success") and result.get("data"):
             return result["data"]
     except Exception:
         pass
 
     try:
-        import requests
-        encoded = requests.utils.quote(artist_name)
+        from urllib.parse import quote
+        encoded = quote(artist_name)
         url = f"https://baike.baidu.com/item/{encoded}"
-        resp = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "text/html",
-        }, timeout=3)
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "text/html",
+            })
         if resp.status_code == 200 and len(resp.text) > 5000:
             try:
                 from bs4 import BeautifulSoup
@@ -1058,10 +1063,10 @@ def _merge_baike_updates(artist, baike_data: dict) -> dict:
     return updates
 
 
-def _ai_generate_fields(artist_name: str, artist, baike_data: dict) -> dict:
+async def _ai_generate_fields(artist_name: str, artist, baike_data: dict) -> dict:
     result = {}
     try:
-        from app.services.qwen_llm_client import call_qwen_chat
+        from app.services.qwen_llm_client import call_qwen_chat_async
 
         hint_parts = []
         if baike_data:
@@ -1101,7 +1106,7 @@ def _ai_generate_fields(artist_name: str, artist, baike_data: dict) -> dict:
 anecdotes 列出尽可能多的著名轶事典故，不得少于5条。
 birth_year 和 death_year 必须是整数（非字符串），未知则用 null。
 只返回JSON，不要其他文字。"""
-        response = call_qwen_chat(
+        response = await call_qwen_chat_async(
             messages=[{"role": "user", "content": prompt_basic}],
             temperature=0.3, max_tokens=3000,
         )
@@ -1132,7 +1137,7 @@ birth_year 和 death_year 必须是整数（非字符串），未知则用 null�
 - 至少输出20条，多多益善
 
 只返回JSON数组，不要其他任何文字。"""
-        response2 = call_qwen_chat(
+        response2 = await call_qwen_chat_async(
             messages=[{"role": "user", "content": prompt_chrono}],
             temperature=0.3, max_tokens=8000,
         )
