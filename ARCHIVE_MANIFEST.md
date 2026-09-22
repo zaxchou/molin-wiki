@@ -2,7 +2,13 @@
 
 > 归档日期：2026-04-26
 > 归档原因：清理工作目录中的无头文件、无用测试脚本、备份文件和重复文件
-> 归档目录：`archive/`（已加入 .gitignore，不会被 git 跟踪）
+> 归档目录：~~`archive/`~~ → **2026-09-22 已整体移出仓库**至
+> `Z:\myagent-work\_archive\molin-wiki\cleanup-2026-09-22\archive\`（仓库瘦身，gitignore 目录不被跟踪）
+>
+> **2026-09-22 第二轮清理**：同批移出 work-logs/、pan_book_extracted.txt、
+> temp_seal_check.txt、test_painting.jpg、dump.rdb，及 deploy/、scripts/ 下
+> 零引用的一次性调试脚本；`scripts/` 内 21 个死脚本与 deploy/qdrant_info.py
+> 走 git rm（历史可恢复）。详见本次清理提交。
 
 ## 归档统计
 
