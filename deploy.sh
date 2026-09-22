@@ -100,7 +100,8 @@ deploy_wiki_code() {
 deploy_wiki_data() {
   section "molin-wiki: 数据文件"
 
-  local dirs=(uploads dzi annotated thumbnails seals knowledge/books static)
+  # composition：构图分析的报告/缩略图/叠加图（历史记录打开依赖它，此前漏同步）
+  local dirs=(uploads dzi annotated thumbnails seals knowledge/books static composition)
 
   for d in "${dirs[@]}"; do
     if [ -d "$WIKI_DATA/$d" ]; then

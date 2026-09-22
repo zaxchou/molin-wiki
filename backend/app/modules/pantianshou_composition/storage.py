@@ -43,20 +43,28 @@ def _base_data_dir() -> str:
 
 
 def to_rel_path(abs_path: str) -> str:
-    """将绝对路径转为相对于 data 目录的相对路径，用于数据库存储。"""
+    """将绝对路径转为相对于 data 目录的相对路径，用于数据库存储。
+
+    统一存 '/' 分隔符：本地 Windows 跑的任务会随 --full 数据库同步推到
+    Linux 服务器，'\\' 在 Linux 上不是路径分隔符（曾导致报告全部 404）。
+    """
     if not abs_path:
         return abs_path
     try:
-        return os.path.relpath(abs_path, _base_data_dir())
+        rel = os.path.relpath(abs_path, _base_data_dir())
     except ValueError:
         # 不同盘符无法转相对路径，原样返回
-        return abs_path
+        rel = abs_path
+    return rel.replace("\\", "/")
 
 
 def to_abs_path(rel_path: str) -> str:
     """将相对路径转为绝对路径，用于文件系统访问。"""
     if not rel_path:
         return rel_path
+    # 兼容历史数据：Windows 上生成的 'composition\\reports\\x.json' 随 DB
+    # 同步到 Linux 后，'\\' 会被当成普通字符导致找不到文件——先归一化
+    rel_path = rel_path.replace("\\", "/")
     if os.path.isabs(rel_path):
         # 兼容旧数据：已经是绝对路径的，先尝试转相对再转绝对（修复盘符变更）
         try:
