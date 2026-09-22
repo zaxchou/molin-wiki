@@ -52,7 +52,7 @@ def _backoff(attempt: int) -> float:
     return 0.5 * (2 ** attempt) + random.uniform(0, 0.25)
 
 
-def _build_body(name: str, model: str, messages: List[Dict[str, str]],
+def _build_body(model: str, messages: List[Dict[str, str]],
                 max_tokens: int, temperature: float,
                 body_defaults: Dict[str, Any], extra_body: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     body: Dict[str, Any] = {
@@ -67,36 +67,23 @@ def _build_body(name: str, model: str, messages: List[Dict[str, str]],
     return body
 
 
-def _chat_request(
+def _chat_request_sync(
     name: str, api_key: str, base_url: str, resolved_model: str,
     messages: List[Dict[str, str]], max_tokens: int, temperature: float,
     body_defaults: Dict[str, Any], extra_body: Optional[Dict[str, Any]],
-    retries: int, timeout: float, is_async: bool,
+    retries: int, timeout: float,
 ) -> Dict[str, Any]:
-    """同步/异步共用的请求-重试循环。"""
-    body: Dict[str, Any] = {
-        "model": resolved_model,
-        "messages": messages or [],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-    body.update(body_defaults)
-    if extra_body:
-        body.update(extra_body)
+    """同步请求-重试循环。"""
+    body = _build_body(resolved_model, messages, max_tokens, temperature, body_defaults, extra_body)
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     last_error = "unknown"
     for attempt in range(retries + 1):
         start = time.monotonic()
         try:
-            if is_async:
-                resp = _get_async_client().post(f"{base_url}/chat/completions",
-                                                headers=headers, json=body,
-                                                timeout=timeout)
-            else:
-                resp = _get_sync_client().post(f"{base_url}/chat/completions",
-                                               headers=headers, json=body,
-                                               timeout=timeout)
+            resp = _get_sync_client().post(f"{base_url}/chat/completions",
+                                           headers=headers, json=body,
+                                           timeout=timeout)
             if resp.status_code in RETRYABLE_STATUS:
                 # 仅可重试状态码进入退避；4xx（鉴权/参数错误）立即失败不重试
                 raise _RetryableStatus(resp.status_code, resp.text[:200])
@@ -129,6 +116,55 @@ def _chat_request(
     raise LLMError(f"LLM 调用失败（{name}:{resolved_model}）: {last_error}")
 
 
+async def _chat_request_async(
+    name: str, api_key: str, base_url: str, resolved_model: str,
+    messages: List[Dict[str, str]], max_tokens: int, temperature: float,
+    body_defaults: Dict[str, Any], extra_body: Optional[Dict[str, Any]],
+    retries: int, timeout: float,
+) -> Dict[str, Any]:
+    """异步请求-重试循环（退避用 asyncio.sleep，不阻塞事件循环）。"""
+    import asyncio
+    body = _build_body(resolved_model, messages, max_tokens, temperature, body_defaults, extra_body)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    last_error = "unknown"
+    for attempt in range(retries + 1):
+        start = time.monotonic()
+        try:
+            resp = await _get_async_client().post(f"{base_url}/chat/completions",
+                                                  headers=headers, json=body,
+                                                  timeout=timeout)
+            if resp.status_code in RETRYABLE_STATUS:
+                raise _RetryableStatus(resp.status_code, resp.text[:200])
+            resp.raise_for_status()
+            data = resp.json()
+            usage = data.get("usage") or {}
+            record(name, resolved_model, time.monotonic() - start, True,
+                   usage.get("total_tokens"))
+            return data
+        except _RetryableStatus as e:
+            last_error = str(e)
+            record(name, resolved_model, time.monotonic() - start, False, error=last_error)
+            if attempt < retries:
+                await asyncio.sleep(_backoff(attempt))
+            continue
+        except httpx.HTTPStatusError as e:
+            last_error = str(e)[:200]
+            record(name, resolved_model, time.monotonic() - start, False, error=last_error)
+            break  # 不可重试的 4xx
+        except httpx.HTTPError as e:
+            last_error = str(e)[:200]
+            record(name, resolved_model, time.monotonic() - start, False, error=last_error)
+            if attempt < retries:
+                await asyncio.sleep(_backoff(attempt))
+            continue
+        except Exception as e:
+            last_error = str(e)[:200]
+            record(name, resolved_model, time.monotonic() - start, False, error=last_error)
+            break
+    raise LLMError(f"LLM 调用失败（{name}:{resolved_model}）: {last_error}")
+
+
 class _RetryableStatus(Exception):
     def __init__(self, status: int, text: str):
         self.status = status
@@ -148,9 +184,9 @@ def chat_completion(
 ) -> Dict[str, Any]:
     """同步 Chat Completions。失败抛 LLMError。"""
     name, api_key, base_url, resolved_model, body_defaults = resolve_provider(provider, model)
-    return _chat_request(name, api_key, base_url, resolved_model, messages,
-                         max_tokens, temperature, body_defaults, extra_body,
-                         retries, timeout, is_async=False)
+    return _chat_request_sync(name, api_key, base_url, resolved_model, messages,
+                              max_tokens, temperature, body_defaults, extra_body,
+                              retries, timeout)
 
 
 async def chat_completion_async(
@@ -166,6 +202,6 @@ async def chat_completion_async(
 ) -> Dict[str, Any]:
     """异步 Chat Completions。失败抛 LLMError。"""
     name, api_key, base_url, resolved_model, body_defaults = resolve_provider(provider, model)
-    return _chat_request(name, api_key, base_url, resolved_model, messages,
-                         max_tokens, temperature, body_defaults, extra_body,
-                         retries, timeout, is_async=True)
+    return await _chat_request_async(name, api_key, base_url, resolved_model, messages,
+                                     max_tokens, temperature, body_defaults, extra_body,
+                                     retries, timeout)
