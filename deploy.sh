@@ -68,12 +68,27 @@ deploy_wiki_code() {
     | ssh "$SSH_HOST" "mkdir -p $WIKI_REMOTE/backend && tar xzf - -C $WIKI_REMOTE/backend" 2>/dev/null
   echo "    done"
 
+  # 2b. 删除传播：tar 只覆盖/新增，本地已删除的源码文件会在服务器上残留。
+  #     仅对 backend/app、backend/tests 和 backend 顶层 *.py 做差集删除，
+  #     绝不触碰 data/、.env 等（服务器无 git，删错无法恢复，范围必须收紧）
+  local del_local="/tmp/wiki_files_local.$$" del_remote="/tmp/wiki_files_remote.$$"
+  ( cd "$WIKI_LOCAL/backend" \
+      && find app tests -name '__pycache__' -prune -o -type f -print \
+      && find . -maxdepth 1 -name '*.py' -type f -printf '%P\n' ) | sort > "$del_local"
+  remote "cd $WIKI_REMOTE/backend && find app tests -name '__pycache__' -prune -o -type f -print 2>/dev/null; find . -maxdepth 1 -name '*.py' -type f -printf '%P\n'" | sort > "$del_remote"
+  comm -13 "$del_local" "$del_remote" | while read -r f; do
+    [ -n "$f" ] || continue
+    echo "    rm (远端残留) $f"
+    remote "rm -f '$WIKI_REMOTE/backend/$f'"
+  done
+  rm -f "$del_local" "$del_remote"
+
   # 3. SCP 前端 dist
   tar_sync "$WIKI_LOCAL/frontend/dist" "$WIKI_REMOTE/frontend/dist" "frontend/dist/"
 
-  # 4. 重启
+  # 4. 重启（backend + worker 共用热挂载代码，都要重启才吃到新代码）
   echo "  → docker restart ..."
-  remote "cd $WIKI_REMOTE/deploy && sudo docker compose restart backend 2>&1 | tail -1"
+  remote "cd $WIKI_REMOTE/deploy && sudo docker compose restart backend worker 2>&1 | tail -1"
 }
 
 deploy_wiki_data() {

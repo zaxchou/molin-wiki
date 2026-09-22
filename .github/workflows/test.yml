@@ -14,13 +14,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
       - name: Install dependencies
         run: |
-          pip install fastapi==0.115.6 sqlalchemy==2.0.23 pydantic==2.10.4 \
-            pydantic-settings==2.1.0 python-multipart pillow PyMuPDF \
-            opencv-python-headless numpy PyJWT \
-            "passlib[bcrypt]" pytest httpx==0.25.2 requests dashscope jieba \
-            scipy redis celery==5.3.6 alembic python-dotenv
+          # 先装 CPU 版 torch（PEP 440：==2.2.0 匹配 2.2.0+cpu），避免从 PyPI 拉 ~2GB CUDA 包
+          pip install torch==2.2.0 torchvision==0.17.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r backend/requirements.txt
       - name: Run contract tests
         working-directory: backend
         run: pytest -q

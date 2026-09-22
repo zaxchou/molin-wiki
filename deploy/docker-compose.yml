@@ -5,6 +5,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+    # 显式命名镜像，worker 复用时引用不再隐式依赖 compose 项目名
+    image: deploy-backend
     restart: always
     ports:
       - "127.0.0.1:8001:8001"
@@ -36,7 +38,8 @@ services:
         condition: service_started
 
   qdrant:
-    image: qdrant/qdrant:latest
+    # 锁版：latest 曾从 v1.9 一路漂到 v1.17；升级需手动改版本并验证数据兼容
+    image: qdrant/qdrant:v1.17.1
     restart: always
     ports:
       - "127.0.0.1:6333:6333"
