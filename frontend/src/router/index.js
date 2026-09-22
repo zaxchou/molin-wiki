@@ -8,8 +8,8 @@ const routes = [
   {
     path: '/',
     name: 'KnowledgeSearch',
-    component: () => import('../views/KnowledgeSearch.vue'),
-    meta: { title: 'title.k7' }
+    component: () => import('../views/KnowledgeSearch.vue')
+    // 不设 meta.title：fullTitle 已含站名，再拼会变成"墨林百科 - 墨林百科 - …"
   },
   { path: '/knowledge', redirect: '/' },
   {

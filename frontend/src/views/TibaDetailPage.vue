@@ -69,7 +69,7 @@
 <style src="../tiba/TibaAnalysis.css" scoped></style>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { tibaApi } from '../api'
@@ -119,6 +119,15 @@ const {
   loadFullItemList, selectImage, loadHistoryItem,
   navigateToImage, autoAnalyze, getDetailAllTags, filterByTag,
 } = detail
+
+// 详情内导航（上一幅/下一幅/作品库缩略图/同册翻页）同步地址栏，
+// 否则刷新或分享链接会回到旧作品
+watch(currentImage, (img) => {
+  const id = img?.image_id || img?.id
+  if (id && String(id) !== String(route.params.id)) {
+    router.replace(`/tiba/${id}`)
+  }
+})
 
 const initialLoading = ref(true)
 const editDialogRef = ref(null)
