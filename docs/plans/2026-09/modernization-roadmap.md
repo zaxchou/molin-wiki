@@ -79,4 +79,5 @@
 | B5 metadata_extractor 迁网关 | ✅ 2026-09-22 | fc4eb40 |
 | B6 tiba_worker 修断链+迁网关 | ✅ 2026-09-22 | fc4eb40 |
 | B7 artists/artist_rules 异步化 | ✅ 2026-09-22 | f69a368 |
-| B8~B16 | 待做 | — |
+| B8 依赖修复（multipart/torch/passlib） | ✅ 2026-09-22 | 775b643 |
+| B9~B16 | 待做 | — |
