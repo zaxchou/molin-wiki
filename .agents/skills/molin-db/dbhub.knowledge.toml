@@ -1,0 +1,154 @@
+# molin-wiki 知识库（knowledge.db）只读 MCP 数据源
+# 消费方：.mcp.json 中的 "molin-knowledge" 条目；验证脚本 scripts/mcp_probe.mjs
+# 领域说明与用法见同目录 SKILL.md
+
+[[sources]]
+id = "knowledge"
+type = "sqlite"
+dsn = "sqlite:///Z:/BaiduNetdiskWorkspace/myagent-work/zcode/molin-wiki/backend/data/knowledge.db"
+
+# ── 内置工具：自由 SQL（强制只读 + 行数上限）与 schema 自省 ──
+[[tools]]
+name = "execute_sql"
+source = "knowledge"
+readonly = true
+max_rows = 500
+
+[[tools]]
+name = "search_objects"
+source = "knowledge"
+
+# ── 领域工具：书目与文本块（RAG） ──
+[[tools]]
+name = "list_pdf_books"
+description = "列出知识库书目（PDF/图录），含作者、页数、类型、状态。"
+source = "knowledge"
+statement = "SELECT b.id, COALESCE(b.title,'') AS title, COALESCE(b.author,'') AS author, b.total_pages, COALESCE(b.status,'') AS status, COALESCE(b.document_type,'') AS document_type, COALESCE(b.source_type,'') AS source_type, b.publish_year, (SELECT COUNT(*) FROM text_chunks t WHERE t.book_id = b.id) AS chunk_count FROM pdf_books b WHERE COALESCE(b.document_type,'') LIKE ? ORDER BY b.created_at DESC LIMIT ?"
+readonly = true
+max_rows = 100
+
+[[tools.parameters]]
+name = "document_type"
+type = "string"
+description = "文献类型过滤；空串或 % 不过滤"
+default = "%"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 50
+
+[[tools]]
+name = "get_pdf_book"
+description = "按 id 取单本书详情 + 文本块/配图数量统计。id 可先用 list_pdf_books 获取。"
+source = "knowledge"
+statement = "SELECT b.id, COALESCE(b.title,'') AS title, COALESCE(b.author,'') AS author, b.total_pages, COALESCE(b.status,'') AS status, COALESCE(b.document_type,'') AS document_type, COALESCE(b.series_id,'') AS series_id, b.page_offset, COALESCE(b.artist_id,0) AS artist_id, substr(COALESCE(b.abstract,''),1,800) AS abstract, COALESCE(b.keywords,'') AS keywords, (SELECT COUNT(*) FROM text_chunks t WHERE t.book_id = b.id) AS chunk_count, (SELECT COUNT(*) FROM extracted_images e WHERE e.book_id = b.id) AS image_count FROM pdf_books b WHERE b.id = ? LIMIT 1"
+readonly = true
+max_rows = 1
+
+[[tools.parameters]]
+name = "id"
+type = "string"
+description = "书籍 id（36 位 UUID）"
+
+[[tools]]
+name = "search_text_chunks"
+description = "在知识库正文文本块中按关键词检索（书名+章节+页码+内容前 400 字）。这是对 Qdrant 向量检索之外的字面兜底。"
+source = "knowledge"
+statement = "SELECT t.book_id, COALESCE(b.title,'') AS book_title, t.chunk_index, COALESCE(t.chapter_title,'') AS chapter_title, t.page_start, t.page_end, substr(COALESCE(t.content,''),1,400) AS content_preview FROM text_chunks t LEFT JOIN pdf_books b ON b.id = t.book_id WHERE COALESCE(t.content,'') LIKE '%' || ? || '%' OR COALESCE(t.chapter_title,'') LIKE '%' || ? || '%' OR COALESCE(b.title,'') LIKE '%' || ? || '%' ORDER BY t.book_id, t.chunk_index LIMIT ?"
+readonly = true
+max_rows = 100
+
+[[tools.parameters]]
+name = "query"
+type = "string"
+description = "检索关键词（中文子串匹配）"
+
+[[tools.parameters]]
+name = "query2"
+type = "string"
+description = "同 query，二次占位（传相同值即可）"
+
+[[tools.parameters]]
+name = "query3"
+type = "string"
+description = "同 query，三次占位（传相同值即可）"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 20
+
+# ── 领域工具：起承转合构图规则 ──
+[[tools]]
+name = "list_composition_rules"
+description = "列出起承转合构图规则（按分类过滤），含权重、量化标准、来源版本。"
+source = "knowledge"
+statement = "SELECT r.rule_id, COALESCE(r.rule_name,'') AS rule_name, COALESCE(r.category_name,'') AS category_name, COALESCE(r.category_code,'') AS category_code, COALESCE(r.subcategory_name,'') AS subcategory_name, r.weight, COALESCE(r.is_active,0) AS is_active, substr(COALESCE(r.condition,''),1,300) AS condition, substr(COALESCE(r.quantitative_standard,''),1,300) AS quantitative_standard, COALESCE(r.source,'') AS source, COALESCE(r.ruleset_version,'') AS ruleset_version FROM composition_rules r WHERE COALESCE(r.category_name,'') LIKE '%' || ? || '%' AND COALESCE(r.is_active,0) = ? ORDER BY r.category_code, r.subcategory_name, r.rule_id LIMIT ?"
+readonly = true
+max_rows = 300
+
+[[tools.parameters]]
+name = "category"
+type = "string"
+description = "分类名子串过滤，如 起、承、转、合；空串不过滤"
+default = ""
+
+[[tools.parameters]]
+name = "active_only"
+type = "integer"
+description = "1=只看启用规则，0=不过滤启用状态"
+default = 1
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 50
+
+[[tools]]
+name = "list_composition_figures"
+description = "列出起承转合构图图例（figure），含类型、评分引用、说明。"
+source = "knowledge"
+statement = "SELECT f.figure_id, COALESCE(f.figure_type,'') AS figure_type, f.score_ref, COALESCE(f.description,'') AS description, COALESCE(f.source,'') AS source, COALESCE(f.ruleset_version,'') AS ruleset_version FROM composition_figures f WHERE COALESCE(f.figure_type,'') LIKE '%' || ? || '%' ORDER BY f.figure_id LIMIT ?"
+readonly = true
+max_rows = 200
+
+[[tools.parameters]]
+name = "figure_type"
+type = "string"
+description = "图型过滤子串；空串不过滤"
+default = ""
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 50
+
+[[tools]]
+name = "list_extracted_images"
+description = "列出知识库抽取的插图记录（可按书过滤），含页码、图号、路径。"
+source = "knowledge"
+statement = "SELECT e.id, e.book_id, COALESCE(b.title,'') AS book_title, COALESCE(e.file_name,'') AS file_name, e.page, COALESCE(e.figure_id,'') AS figure_id, substr(COALESCE(e.caption,''),1,200) AS caption, COALESCE(e.stored_url,'') AS stored_url FROM extracted_images e LEFT JOIN pdf_books b ON b.id = e.book_id WHERE (? = '' OR e.book_id = ?) ORDER BY e.book_id, e.page LIMIT ?"
+readonly = true
+max_rows = 100
+
+[[tools.parameters]]
+name = "book_id"
+type = "string"
+description = "按书 id 过滤；空串不过滤"
+default = ""
+
+[[tools.parameters]]
+name = "book_id2"
+type = "string"
+description = "同 book_id，二次占位（传相同值即可）"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 30

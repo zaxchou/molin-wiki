@@ -1,0 +1,171 @@
+# molin-wiki 主库（calligraphy.db）只读 MCP 数据源
+# 消费方：.mcp.json 中的 "molin-db" 条目；验证脚本 scripts/mcp_probe.mjs
+# 领域说明与用法见同目录 SKILL.md
+
+[[sources]]
+id = "wiki"
+type = "sqlite"
+dsn = "sqlite:///Z:/BaiduNetdiskWorkspace/myagent-work/zcode/molin-wiki/backend/data/calligraphy.db"
+
+# ── 内置工具：自由 SQL（强制只读 + 行数上限）与 schema 自省 ──
+[[tools]]
+name = "execute_sql"
+source = "wiki"
+readonly = true
+max_rows = 500
+
+[[tools]]
+name = "search_objects"
+source = "wiki"
+
+# ── 领域工具：艺术家 ──
+[[tools]]
+name = "list_artists"
+description = "列出艺术家（按朝代子串过滤），附题跋/印章数量统计。空 dynasty 返回全部，按推荐度排序。"
+source = "wiki"
+statement = "SELECT a.id, a.name, COALESCE(a.dynasty,'') AS dynasty, COALESCE(a.alias,'') AS alias, COALESCE(a.featured,0) AS featured, COALESCE(a.verified,0) AS verified, COALESCE(a.view_count,0) AS view_count, (SELECT COUNT(*) FROM tubi_analyses t WHERE t.artist = a.name) AS tiba_count, (SELECT COUNT(*) FROM seals s WHERE s.artist_id = a.id) AS seal_count FROM artists a WHERE COALESCE(a.dynasty,'') LIKE '%' || ? || '%' ORDER BY a.featured DESC, a.view_count DESC, a.id ASC LIMIT ?"
+readonly = true
+max_rows = 200
+
+[[tools.parameters]]
+name = "dynasty"
+type = "string"
+description = "朝代子串，如 明、清、宋；空串表示不过滤"
+default = ""
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 50
+
+[[tools]]
+name = "get_artist"
+description = "按姓名取单个艺术家的完整档案（生平、风格、代表作等）+ 题跋/印章统计。"
+source = "wiki"
+statement = "SELECT a.id, a.name, COALESCE(a.dynasty,'') AS dynasty, COALESCE(a.alias,'') AS alias, COALESCE(a.hometown,'') AS hometown, a.birth_year, a.death_year, COALESCE(a.background,'') AS background, COALESCE(a.summary,'') AS summary, COALESCE(a.art_style,'') AS art_style, COALESCE(a.biography,'') AS biography, COALESCE(a.tags,'') AS tags, COALESCE(a.avatar_url,'') AS avatar_url, COALESCE(a.featured,0) AS featured, COALESCE(a.verified,0) AS verified, COALESCE(a.view_count,0) AS view_count, (SELECT COUNT(*) FROM tubi_analyses t WHERE t.artist = a.name) AS tiba_count, (SELECT COUNT(*) FROM seals s WHERE s.artist_id = a.id) AS seal_count FROM artists a WHERE a.name = ? LIMIT 1"
+readonly = true
+max_rows = 1
+
+[[tools.parameters]]
+name = "name"
+type = "string"
+description = "艺术家姓名，精确匹配，如：徐渭"
+
+# ── 领域工具：作品库（题跋分析） ──
+[[tools]]
+name = "list_tiba_analyses"
+description = "列出作品库图片分析记录（题跋面积、主题标签、状态），可按艺术家子串/状态过滤。"
+source = "wiki"
+statement = "SELECT t.image_id, COALESCE(t.title,'') AS title, COALESCE(t.artist,'') AS artist, t.year, COALESCE(t.album_name,'') AS album_name, t.inscription_percent, t.painting_percent, COALESCE(t.status,'') AS status, COALESCE(t.theme_tags,'') AS theme_tags, t.created_at FROM tubi_analyses t WHERE COALESCE(t.artist,'') LIKE '%' || ? || '%' AND COALESCE(t.status,'') LIKE ? ORDER BY t.id DESC LIMIT ?"
+readonly = true
+max_rows = 200
+
+[[tools.parameters]]
+name = "artist"
+type = "string"
+description = "艺术家名子串过滤；空串不过滤"
+default = ""
+
+[[tools.parameters]]
+name = "status"
+type = "string"
+description = "状态过滤，如 analyzed；空串或 % 不过滤"
+default = "%"
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 30
+
+[[tools]]
+name = "get_tiba_analysis"
+description = "按 image_id 取单张作品的完整分析：题跋释文、内容分析、面积占比、标注图路径。"
+source = "wiki"
+statement = "SELECT t.image_id, COALESCE(t.title,'') AS title, COALESCE(t.artist,'') AS artist, t.year, COALESCE(t.period,'') AS period, COALESCE(t.period_phase,'') AS period_phase, COALESCE(t.status,'') AS status, COALESCE(t.inscription_content,'') AS inscription_content, substr(COALESCE(t.content_analysis,''),1,2000) AS content_analysis, COALESCE(t.theme_tags,'') AS theme_tags, COALESCE(t.material_tags,'') AS material_tags, COALESCE(t.style_tags,'') AS style_tags, COALESCE(t.subject_tags,'') AS subject_tags, t.inscription_percent, t.painting_percent, COALESCE(t.album_name,'') AS album_name, t.album_index, COALESCE(t.filepath,'') AS filepath, COALESCE(t.annotated_image_path,'') AS annotated_image_path, COALESCE(t.thumbnail_path,'') AS thumbnail_path FROM tubi_analyses t WHERE t.image_id = ? LIMIT 1"
+readonly = true
+max_rows = 1
+
+[[tools.parameters]]
+name = "image_id"
+type = "string"
+description = "作品分析记录的 image_id（可先用 list_tiba_analyses 获取）"
+
+# ── 领域工具：印章 / 馆藏 / 构图任务 ──
+[[tools]]
+name = "list_seals"
+description = "列出印章记录，可按艺术家名子串过滤，附每方印的图片数量。"
+source = "wiki"
+statement = "SELECT s.id, s.name, COALESCE(s.artist_name,'') AS artist_name, s.artist_id, COALESCE(s.seal_type,'') AS seal_type, COALESCE(s.source,'') AS source, (SELECT COUNT(*) FROM seal_images i WHERE i.seal_id = s.id) AS image_count FROM seals s WHERE COALESCE(s.artist_name,'') LIKE '%' || ? || '%' ORDER BY s.id DESC LIMIT ?"
+readonly = true
+max_rows = 200
+
+[[tools.parameters]]
+name = "artist"
+type = "string"
+description = "艺术家名子串过滤；空串不过滤"
+default = ""
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 30
+
+[[tools]]
+name = "list_libraries"
+description = "列出作品馆藏集（作品库分册），含可见性与作品数。"
+source = "wiki"
+statement = "SELECT l.id, l.name, COALESCE(l.artist_name,'') AS artist_name, COALESCE(l.description,'') AS description, COALESCE(l.visibility,'') AS visibility, COALESCE(l.artwork_count,0) AS artwork_count, l.owner_id, l.created_at FROM artwork_libraries l ORDER BY l.id ASC LIMIT ?"
+readonly = true
+max_rows = 50
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 30
+
+[[tools]]
+name = "list_composition_jobs"
+description = "列出构图分析（起承转合）任务及状态，含报告/PDF 产物路径。"
+source = "wiki"
+statement = "SELECT j.id, COALESCE(j.status,'') AS status, COALESCE(j.progress,0) AS progress, COALESCE(j.stage,'') AS stage, COALESCE(j.message,'') AS message, COALESCE(j.error_code,'') AS error_code, COALESCE(j.report_json_path,'') AS report_json_path, COALESCE(j.pdf_path,'') AS pdf_path, j.created_at, j.updated_at FROM composition_jobs j WHERE COALESCE(j.status,'') LIKE '%' || ? || '%' ORDER BY j.created_at DESC LIMIT ?"
+readonly = true
+max_rows = 100
+
+[[tools.parameters]]
+name = "status"
+type = "string"
+description = "状态子串过滤，如 done/failed；空串不过滤"
+default = ""
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 30
+
+# ── 领域工具：用户与设置（安全列视图） ──
+[[tools]]
+name = "list_users"
+description = "列出用户账号概览（昵称/角色/UID/注册时间）。故意不返回 password_hash、微信 openid、手机号、邮箱等敏感列。"
+source = "wiki"
+statement = "SELECT u.id, COALESCE(u.nickname,'') AS nickname, COALESCE(u.role,'') AS role, COALESCE(u.uid,'') AS uid, COALESCE(u.subscription_tier,'') AS subscription_tier, COALESCE(u.score,0) AS score, u.created_at FROM users u ORDER BY u.id ASC LIMIT ?"
+readonly = true
+max_rows = 50
+
+[[tools.parameters]]
+name = "limit"
+type = "integer"
+description = "最多返回条数"
+default = 20
+
+[[tools]]
+name = "get_site_settings"
+description = "读取站点设置 KV 表全部键值（含 hidden_artists 等运行时开关）。"
+source = "wiki"
+statement = "SELECT s.key, s.value, s.updated_at FROM site_settings s ORDER BY s.key ASC"
+readonly = true
+max_rows = 100

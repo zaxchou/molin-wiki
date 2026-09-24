@@ -18,6 +18,30 @@
         "MIMO_API_BASE": "https://api.xiaomimimo.com/v1",
         "MIMO_MODEL": "mimo-v2.5"
       }
+    },
+    "molin-db": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@bytebase/dbhub@1.3.1",
+        "--transport",
+        "stdio",
+        "--config",
+        "Z:/BaiduNetdiskWorkspace/myagent-work/zcode/molin-wiki/.agents/skills/molin-db/dbhub.wiki.toml"
+      ]
+    },
+    "molin-knowledge": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "--yes",
+        "@bytebase/dbhub@1.3.1",
+        "--transport",
+        "stdio",
+        "--config",
+        "Z:/BaiduNetdiskWorkspace/myagent-work/zcode/molin-wiki/.agents/skills/molin-db/dbhub.knowledge.toml"
+      ]
     }
   }
 }
